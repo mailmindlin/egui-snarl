@@ -338,7 +338,7 @@ impl NodeLayout {
         }
     }
 
-    fn output_heights(self, state: &NodeState) -> Heights<'_> {
+    fn output_heights(self, state: &'_ NodeState) -> Heights<'_> {
         let rows = state.output_heights().as_slice();
 
         let outer = match (self.kind, self.equal_pin_row_heights) {
@@ -1117,7 +1117,7 @@ impl SnarlWidget {
     /// Prefer using [`SnarlWidget::id_salt`] otherwise.
     #[inline]
     #[must_use]
-    pub fn id(mut self, id: Id) -> Self {
+    pub const fn id(mut self, id: Id) -> Self {
         self.id = Some(id);
         self
     }
@@ -1137,7 +1137,7 @@ impl SnarlWidget {
     /// Set style parameters for the [`Snarl`] widget.
     #[inline]
     #[must_use]
-    pub fn style(mut self, style: SnarlStyle) -> Self {
+    pub const fn style(mut self, style: SnarlStyle) -> Self {
         self.style = style;
         self
     }
@@ -1153,7 +1153,7 @@ impl SnarlWidget {
     /// Set minimum size of the [`Snarl`] widget.
     #[inline]
     #[must_use]
-    pub fn min_size(mut self, min_size: Vec2) -> Self {
+    pub const fn min_size(mut self, min_size: Vec2) -> Self {
         self.min_size = min_size;
         self
     }
@@ -1161,7 +1161,7 @@ impl SnarlWidget {
     /// Set maximum size of the [`Snarl`] widget.
     #[inline]
     #[must_use]
-    pub fn max_size(mut self, max_size: Vec2) -> Self {
+    pub const fn max_size(mut self, max_size: Vec2) -> Self {
         self.max_size = max_size;
         self
     }
@@ -1339,7 +1339,7 @@ where
     if input.modifiers == config.rect_select.modifiers || snarl_state.is_rect_selection() {
         let select_resp = ui.interact(snarl_resp.rect, snarl_id.with("select"), Sense::drag());
 
-        if select_resp.dragged_by(config.rect_select.mouse_button)
+        if select_resp.dragged_by(PointerButton::Primary)
             && let Some(pos) = select_resp.interact_pointer_pos()
         {
             if snarl_state.is_rect_selection() {
@@ -1534,6 +1534,13 @@ where
         viewer.disconnect(&out_pin, &in_pin, snarl);
     }
 
+    // Remove hovered wire by second click
+    if hovered_wire_disconnect && let Some(wire) = hovered_wire {
+        let out_pin = OutPin::new(snarl, wire.out_pin);
+        let in_pin = InPin::new(snarl, wire.in_pin);
+        viewer.disconnect(&out_pin, &in_pin, snarl);
+    }
+
     if let Some(select_rect) = rect_selection_ended {
         let mut select_nodes: Vec<NodeId> = node_rects
             .into_iter()
@@ -1602,7 +1609,7 @@ where
     }
 
     // Wire end position will be overridden when link graph menu is opened.
-    let mut wire_end_pos = latest_pos.unwrap_or(snarl_resp.rect.center());
+    let mut wire_end_pos = latest_pos.unwrap_or_else(|| snarl_resp.rect.center());
 
     if drag_released {
         let new_wires = snarl_state.take_new_wires();
@@ -3689,7 +3696,7 @@ fn transform_matching_points(from: Pos2, to: Pos2, scaling: f32) -> TSTransform 
 
 #[inline]
 #[must_use]
-fn scale_transform_around(transform: &mut TSTransform, scaling: f32, point: Pos2) -> TSTransform {
+fn scale_transform_around(transform: &TSTransform, scaling: f32, point: Pos2) -> TSTransform {
     let from = (point - transform.translation) / transform.scaling;
     transform_matching_points(from, point, scaling)
 }
