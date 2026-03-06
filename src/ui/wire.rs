@@ -1495,3 +1495,214 @@ fn lower_bound(min: usize, max: usize, f: impl Fn(usize) -> bool) -> usize {
     // }
     // max
 }
+
+/// Describes where and how to place a widget on a wire.
+#[derive(Clone, Debug)]
+pub struct WireWidgetDescriptor {
+    /// Position along the wire curve. 0.0 = output pin, 1.0 = input pin.
+    /// 
+    /// Default: 0.5.
+    pub t: f32,
+
+    /// Per-widget alignment override.
+    /// 
+    /// Falls back to [`SnarlStyle::wire_widget_align`](super::SnarlStyle::wire_widget_align).
+    pub align: Option<Align2>,
+
+    /// Per-widget gap override.
+    /// 
+    /// Falls back to [`SnarlStyle::wire_widget_gap`](super::SnarlStyle::wire_widget_gap).
+    pub gap: Option<f32>,
+}
+
+impl Default for WireWidgetDescriptor {
+    fn default() -> Self {
+        Self {
+            t: 0.5,
+            align: None,
+            gap: None,
+        }
+    }
+}
+
+impl WireWidgetDescriptor {
+    /// Creates a descriptor at the given parametric position `t` with default alignment and gap.
+    #[must_use]
+    pub const fn new(t: f32) -> Self {
+        Self {
+            t,
+            align: None,
+            gap: None,
+        }
+    }
+}
+
+/// Resolved context for a wire widget, passed to
+/// [`SnarlViewer::show_wire_widget`](super::SnarlViewer::show_wire_widget).
+///
+/// Contains the final values after resolving descriptor overrides against style
+/// defaults, plus the computed screen-space position.
+#[derive(Clone, Debug)]
+pub struct WireWidgetContext {
+    /// Parametric position along the wire curve (same as [`WireWidgetDescriptor`](WireWidgetDescriptor::t)).
+    pub t: f32,
+
+    /// Screen-space position on the wire curve.
+    pub pos: Pos2,
+
+    /// Resolved alignment.
+    pub align: Align2,
+
+    /// Resolved gap.
+    pub gap: f32,
+}
+
+/// Evaluate a point on the wire curve at parametric position `t` (0.0..=1.0).
+///
+/// `t = 0.0` is the output pin position (`from`), `t = 1.0` is the input pin
+/// position (`to`).
+///
+/// For bezier curves, `t` is the standard parametric parameter, which is
+/// **not** uniform with respect to arc length. For axis-aligned wires, `t` is
+/// interpolated by arc length so that `t = 0.5` falls at the visual midpoint.
+#[allow(clippy::too_many_arguments)]
+pub fn point_on_wire(
+    frame_size: f32,
+    upscale: bool,
+    downscale: bool,
+    from: Pos2,
+    to: Pos2,
+    style: WireStyle,
+    vertical: bool,
+    t: f32,
+) -> Pos2 {
+    let frame_size = adjust_frame_size(frame_size, upscale, downscale, from, to);
+
+    match style {
+        WireStyle::Line => from.lerp(to, t),
+        WireStyle::Bezier3 => {
+            let points = if vertical {
+                wire_bezier_3_vertical(frame_size, from, to)
+            } else {
+                wire_bezier_3(frame_size, from, to)
+            };
+            sample_bezier(&points, t)
+        }
+        WireStyle::Bezier5 => {
+            let points = if vertical {
+                wire_bezier_5_vertical(frame_size, from, to)
+            } else {
+                wire_bezier_5_horizontal(frame_size, from, to)
+            };
+            sample_bezier(&points, t)
+        }
+        WireStyle::AxisAligned { corner_radius } => {
+            let aawire = wire_axis_aligned(corner_radius, frame_size, from, to);
+            sample_axis_aligned_by_arc_length(&aawire, t)
+        }
+    }
+}
+
+/// Sample a point along an axis-aligned wire by arc-length fraction `t`.
+///
+/// The wire consists of straight segments interleaved with quarter-circle arc
+/// turns. We compute the total arc length, then walk the segments/turns to
+/// find the point at `t * total_length`.
+fn sample_axis_aligned_by_arc_length(wire: &AxisAlignedWire, t: f32) -> Pos2 {
+    let t = t.clamp(0.0, 1.0);
+
+    // Collect lengths of each piece: segment, turn, segment, turn, ..., segment.
+    // Total pieces = turns + 1 segments + turns arcs = 2*turns + 1.
+    let num_segments = wire.turns + 1;
+    let num_pieces = num_segments + wire.turns;
+
+    // We'll walk the pieces inline rather than allocating.
+    // First pass: compute total length.
+    let mut total_length = 0.0f32;
+    for i in 0..num_pieces {
+        if i % 2 == 0 {
+            // Straight segment
+            let seg_idx = i / 2;
+            let (start, end) = wire.segments[seg_idx];
+            total_length += (end - start).length();
+        } else {
+            // Arc turn (quarter circle)
+            let turn_idx = i / 2;
+            let radius = wire.turn_radii[turn_idx];
+            if radius > 0.0 {
+                total_length += std::f32::consts::FRAC_PI_2 * radius;
+            }
+        }
+    }
+
+    if total_length <= 0.0 {
+        return wire.segments[0].0;
+    }
+
+    // Second pass: walk to target distance.
+    let target = t * total_length;
+    let mut walked = 0.0f32;
+
+    for i in 0..num_pieces {
+        if i % 2 == 0 {
+            // Straight segment
+            let seg_idx = i / 2;
+            let (start, end) = wire.segments[seg_idx];
+            let seg_len = (end - start).length();
+            if walked + seg_len >= target {
+                let frac = if seg_len > 0.0 {
+                    (target - walked) / seg_len
+                } else {
+                    0.0
+                };
+                return start.lerp(end, frac);
+            }
+            walked += seg_len;
+        } else {
+            // Arc turn (quarter circle)
+            let turn_idx = i / 2;
+            let radius = wire.turn_radii[turn_idx];
+            if radius <= 0.0 {
+                continue;
+            }
+            let arc_len = std::f32::consts::FRAC_PI_2 * radius;
+            if walked + arc_len >= target {
+                let frac = (target - walked) / arc_len;
+                return sample_quarter_arc(wire, turn_idx, frac);
+            }
+            walked += arc_len;
+        }
+    }
+
+    // Rounding: return the end point.
+    wire.segments[wire.turns].1
+}
+
+/// Sample a quarter-circle arc turn at fractional position `frac` (0.0..=1.0).
+///
+/// The arc connects the end of `segments[turn_idx]` to the start of
+/// `segments[turn_idx + 1]`, centered at `turn_centers[turn_idx]`.
+fn sample_quarter_arc(wire: &AxisAlignedWire, turn_idx: usize, frac: f32) -> Pos2 {
+    let center = wire.turn_centers[turn_idx];
+    let arc_start = wire.segments[turn_idx].1;
+    let arc_end = wire.segments[turn_idx + 1].0;
+
+    // Determine start and sweep angles from the arc endpoints relative to center.
+    let start_offset = arc_start - center;
+    let end_offset = arc_end - center;
+    let start_angle = f32::atan2(start_offset.y, start_offset.x);
+    let mut end_angle = f32::atan2(end_offset.y, end_offset.x);
+
+    // Ensure we sweep in the shorter direction (quarter circle).
+    let mut sweep = end_angle - start_angle;
+    if sweep > std::f32::consts::PI {
+        sweep -= std::f32::consts::TAU;
+    } else if sweep < -std::f32::consts::PI {
+        sweep += std::f32::consts::TAU;
+    }
+    end_angle = start_angle + sweep;
+
+    let angle = start_angle + frac * (end_angle - start_angle);
+    let radius = wire.turn_radii[turn_idx];
+    pos2(center.x + radius * angle.cos(), center.y + radius * angle.sin())
+}

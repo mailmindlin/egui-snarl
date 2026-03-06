@@ -38,7 +38,7 @@ pub use self::{
     pin::{AnyPins, PinContext, PinInfo, PinShape, PinWireInfo, SnarlPin},
     state::selected_nodes,
     viewer::SnarlViewer,
-    wire::{WireLayer, WireStyle},
+    wire::{WireLayer, WireStyle, WireWidgetContext, WireWidgetDescriptor, point_on_wire},
 };
 
 /// Controls how header, pins, body and footer are placed in the node.
@@ -155,6 +155,17 @@ impl NodeLayoutKind {
 #[derive(Clone)]
 pub struct WireWidgetCache {
     widget_size: Vec2,
+}
+
+/// Collected info for deferred wire widget rendering.
+struct WireWidgetInfo<'a> {
+    out_pin: &'a OutPin,
+    in_pin: &'a InPin,
+    from_pos: Pos2,
+    to_pos: Pos2,
+    wire_style: wire::WireStyle,
+    vertical: bool,
+    descriptors: Vec<wire::WireWidgetDescriptor>,
 }
 
 /// Controls how node elements are laid out.
@@ -1492,9 +1503,18 @@ where
                     let wire_r =
                         ui.interact(snarl_resp.rect, ui.make_persistent_id(wire), Sense::click());
 
+                    let suppress = viewer.wire_interact(
+                        &wire.out_pin,
+                        &wire.in_pin,
+                        &wire_r,
+                        snarl,
+                    );
+
                     //Remove hovered wire by second click
-                    hovered_wire_disconnect |=
-                        wire_r.clicked_by(config.remove_hovered_wire.mouse_button);
+                    if !suppress {
+                        hovered_wire_disconnect |=
+                            wire_r.clicked_by(config.remove_hovered_wire.mouse_button);
+                    }
                 }
             }
         }
@@ -1531,14 +1551,17 @@ where
             pick_wire_style(from_r.wire_style, to_r.wire_style),
             vertical_wire,
         );
-        if viewer.has_wire_widget(&wire.out_pin, &wire.in_pin, snarl) {
-            let center = Pos2::new(
-                f32::midpoint(from_r.pos.x, to_r.pos.x),
-                f32::midpoint(from_r.pos.y, to_r.pos.y),
-            );
-            let wire_x_length =
-                f32::max(from_r.pos.x, to_r.pos.x) - f32::min(from_r.pos.x, to_r.pos.x);
-            wire_widgets.push((out_pin, in_pin, center, wire_x_length));
+        let descriptors = viewer.wire_widgets(&wire.out_pin, &wire.in_pin, snarl);
+        if !descriptors.is_empty() {
+            wire_widgets.push(WireWidgetInfo {
+                out_pin,
+                in_pin,
+                from_pos: from_r.pos,
+                to_pos: to_r.pos,
+                wire_style: pick_wire_style(from_r.wire_style, to_r.wire_style),
+                vertical: vertical_wire,
+                descriptors,
+            });
         }
     }
 
@@ -1790,39 +1813,71 @@ where
         }
     }
 
-    for (out_pin, in_pin, center, wire_x_length) in wire_widgets {
-        let id = Id::new("wire-widget").with((out_pin.id, in_pin.id));
-        let cached = ui
-            .ctx()
-            .memory(|mem| mem.data.get_temp::<WireWidgetCache>(id));
-        let child_size = match cached {
-            Some(cached) => cached.widget_size,
-            None => Vec2::new(wire_x_length, 0.0)
-        };
-        let widget_rect = RectAlign {
-            parent: Align2::CENTER_CENTER,
-            child: style.wire_widget_align.unwrap_or(Align2::CENTER_CENTER),
-        }
-        .align_rect(
-            &Rect::from_center_size(center, [wire_x_length, 0.0].into()),
-            child_size,
-            style.wire_widget_gap.unwrap_or(0.0),
-        );
-        let mut wire_ui = ui.new_child(
-            UiBuilder::new()
-                .max_rect(widget_rect)
-                .layout(Layout::default())
-                .id_salt(id),
-        );
-        viewer.show_wire_widget(out_pin, in_pin, &mut wire_ui, snarl);
-        ui.ctx().memory_mut(|mem| {
-            mem.data.insert_temp(
-                id,
-                WireWidgetCache {
-                    widget_size: wire_ui.min_rect().size(),
-                },
+    for info in wire_widgets {
+        let wire_x_length = (info.from_pos.x - info.to_pos.x).abs();
+
+        for (index, descriptor) in info.descriptors.into_iter().enumerate() {
+            let center = point_on_wire(
+                wire_frame_size,
+                style.upscale_wire_frame(),
+                style.downscale_wire_frame(),
+                info.from_pos,
+                info.to_pos,
+                info.wire_style,
+                info.vertical,
+                descriptor.t,
             );
-        });
+
+            let id = Id::new("wire-widget").with((info.out_pin.id, info.in_pin.id, index));
+            let cached = ui
+                .ctx()
+                .memory(|mem| mem.data.get_temp::<WireWidgetCache>(id));
+            let child_size = match cached {
+                Some(cached) => cached.widget_size,
+                None => Vec2::new(wire_x_length, 0.0),
+            };
+            let ctx = wire::WireWidgetContext {
+                t: descriptor.t,
+                pos: center,
+                align: descriptor
+                    .align
+                    .unwrap_or_else(|| style.wire_widget_align.unwrap_or(Align2::CENTER_CENTER)),
+                gap: descriptor
+                    .gap
+                    .unwrap_or_else(|| style.wire_widget_gap.unwrap_or(0.0)),
+            };
+            let widget_rect = RectAlign {
+                parent: Align2::CENTER_CENTER,
+                child: ctx.align,
+            }
+            .align_rect(
+                &Rect::from_center_size(center, [wire_x_length, 0.0].into()),
+                child_size,
+                ctx.gap,
+            );
+            let mut wire_ui = ui.new_child(
+                UiBuilder::new()
+                    .max_rect(widget_rect)
+                    .layout(Layout::default())
+                    .id_salt(id),
+            );
+            viewer.show_wire_widget(
+                index,
+                &ctx,
+                info.out_pin,
+                info.in_pin,
+                &mut wire_ui,
+                snarl,
+            );
+            ui.ctx().memory_mut(|mem| {
+                mem.data.insert_temp(
+                    id,
+                    WireWidgetCache {
+                        widget_size: wire_ui.min_rect().size(),
+                    },
+                );
+            });
+        }
     }
 
     ui.advance_cursor_after_rect(Rect::from_min_size(snarl_resp.rect.min, Vec2::ZERO));

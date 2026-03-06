@@ -1,10 +1,11 @@
-use egui::{Painter, Pos2, Rect, Style, Ui, emath::TSTransform};
+use egui::{Painter, Pos2, Rect, Response, Style, Ui, emath::TSTransform};
 
 use crate::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 
 use super::{
     BackgroundPattern, NodeLayout, SnarlStyle,
     pin::{AnyPins, PinContext, SnarlPin},
+    wire::{WireWidgetContext, WireWidgetDescriptor},
 };
 
 /// `SnarlViewer` is a trait for viewing a Snarl.
@@ -268,19 +269,60 @@ pub trait SnarlViewer<T> {
         None
     }
 
-    /// Checks if wire has something to show in widget.
-    /// This may not be called if wire is invisible.
+    /// Returns descriptors for wire widgets to display on this wire.
+    /// Each descriptor specifies a parametric position `t` along the curve
+    /// and optional per-widget alignment overrides.
+    ///
+    /// Return an empty [`Vec`] for no widgets (the default).
+    /// This may not be called if the wire is invisible.
     #[inline]
-    fn has_wire_widget(&mut self, from: &OutPinId, to: &InPinId, snarl: &Snarl<T>) -> bool {
+    fn wire_widgets(
+        &mut self,
+        from: &OutPinId,
+        to: &InPinId,
+        snarl: &Snarl<T>,
+    ) -> Vec<WireWidgetDescriptor> {
         let _ = (from, to, snarl);
-        false
+        vec![]
     }
 
-    /// Renders the wire's widget.
-    /// This may not be called if wire is invisible.
+    /// Renders the wire widget at the given `index`.
+    ///
+    /// `index` corresponds to the position in the [`Vec`] returned by
+    /// [`Self::wire_widgets`]. The [`WireWidgetContext`] contains the resolved
+    /// position, alignment, and gap after applying style defaults.
+    ///
+    /// This may not be called if the wire is invisible.
     #[inline]
-    fn show_wire_widget(&mut self, from: &OutPin, to: &InPin, ui: &mut Ui, snarl: &mut Snarl<T>) {
-        let _ = (from, to, ui, snarl);
+    fn show_wire_widget(
+        &mut self,
+        index: usize,
+        context: &WireWidgetContext,
+        from: &OutPin,
+        to: &InPin,
+        ui: &mut Ui,
+        snarl: &mut Snarl<T>,
+    ) {
+        let _ = (index, context, from, to, ui, snarl);
+    }
+
+    /// Called when a wire is hovered or clicked.
+    ///
+    /// Use the [`Response`] to query interaction state (e.g.
+    /// [`Response::clicked`], [`Response::secondary_clicked`],
+    /// [`Response::hovered`]).
+    ///
+    /// Return `true` to suppress the default disconnect-on-click behavior.
+    #[inline]
+    fn wire_interact(
+        &mut self,
+        from: &OutPinId,
+        to: &InPinId,
+        response: &Response,
+        snarl: &Snarl<T>,
+    ) -> bool {
+        let _ = (from, to, response, snarl);
+        false
     }
 
     /// Checks if the snarl has something to show in context menu if right-clicked or long-touched on empty space at `pos`.
