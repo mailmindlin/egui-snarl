@@ -4,14 +4,13 @@ use std::{collections::HashMap, hash::Hash};
 
 use egui::{
     Align, Align2, Color32, CornerRadius, Frame, Id, Key, LayerId, Layout, Margin, Modifiers,
-    PointerButton, Pos2, Rect, Scene, Sense, Shape, Stroke, StrokeKind, Style, Ui, UiBuilder,
+    PointerButton, Pos2, Rect, Scene, Sense, Stroke, StrokeKind, Style, Ui, UiBuilder,
     UiKind, UiStackInfo, Vec2,
     collapsing_header::paint_default_icon,
     emath::{GuiRounding, RectAlign, TSTransform},
     epaint::Shadow,
     pos2,
     response::Flags,
-    layers::ShapeIdx,
     vec2,
 };
 use egui_scale::EguiScale;
@@ -1260,8 +1259,20 @@ where
     content_rect.max.y = content_rect.max.y.max(content_rect.min.y);
 
     let snarl_layer_id = LayerId::new(ui.layer_id().order, snarl_id);
+    let wire_layer_id = LayerId::new(ui.layer_id().order, snarl_id.with("wires"));
+    let node_layer_id = LayerId::new(ui.layer_id().order, snarl_id.with("nodes"));
 
     ui.ctx().set_sublayer(ui.layer_id(), snarl_layer_id);
+    match style.wire_layer() {
+        WireLayer::BehindNodes => {
+            ui.ctx().set_sublayer(snarl_layer_id, wire_layer_id);
+            ui.ctx().set_sublayer(snarl_layer_id, node_layer_id);
+        }
+        WireLayer::AboveNodes => {
+            ui.ctx().set_sublayer(snarl_layer_id, node_layer_id);
+            ui.ctx().set_sublayer(snarl_layer_id, wire_layer_id);
+        }
+    }
 
     let mut min_scale = style.min_scale();
     let mut max_scale = style.max_scale();
@@ -1332,8 +1343,10 @@ where
     ui.set_clip_rect(viewport.intersect(viewport_clip));
     ui.expand_to_include_rect(viewport);
 
-    // Set transform for snarl layer.
+    // Set transform for snarl layer and sublayers.
     ui.ctx().set_transform_layer(snarl_layer_id, to_global);
+    ui.ctx().set_transform_layer(wire_layer_id, to_global);
+    ui.ctx().set_transform_layer(node_layer_id, to_global);
 
     // Map latest pointer position to graph space.
     latest_pos = latest_pos.map(|pos| from_global * pos);
@@ -1382,20 +1395,6 @@ where
     let wire_width = style.wire_width(ui.style());
     let wire_threshold = style.wire_smoothness();
 
-    let wire_shape_idx = match style.wire_layer() {
-        WireLayer::BehindNodes => Some(ui.painter().add(Shape::Noop)),
-        WireLayer::AboveNodes => None,
-    };
-
-    // For BehindNodes, reserve a shape slot for wire widget content before
-    // nodes are drawn. After rendering wire widgets (which adds shapes at the
-    // end of the paint list), we move those shapes to this reserved slot so
-    // they appear behind nodes.
-    let wire_widget_shape_idx = match style.wire_layer() {
-        WireLayer::BehindNodes => Some(ui.painter().add(Shape::Noop)),
-        WireLayer::AboveNodes => None,
-    };
-
     let mut input_info = HashMap::new();
     let mut output_info = HashMap::new();
     let mut input_pins = HashMap::new();
@@ -1409,6 +1408,13 @@ where
     let mut nodes_bb = Rect::NOTHING;
     let mut node_rects = Vec::new();
 
+    let mut node_ui = ui.new_child(
+        UiBuilder::new()
+            .layer_id(node_layer_id)
+            .max_rect(ui.max_rect()),
+    );
+    node_ui.set_clip_rect(ui.clip_rect());
+
     for node_idx in draw_order {
         if !snarl.nodes.contains(node_idx.0) {
             continue;
@@ -1417,7 +1423,7 @@ where
         // show_node(node_idx);
         let response = draw_node(
             snarl,
-            &mut ui,
+            &mut node_ui,
             node_idx,
             viewer,
             &mut snarl_state,
@@ -1812,17 +1818,10 @@ where
         }
     }
 
-    match wire_shape_idx {
-        None => {
-            ui.painter().add(Shape::Vec(wire_shapes));
-        }
-        Some(idx) => {
-            ui.painter().set(idx, Shape::Vec(wire_shapes));
-        }
+    let wire_painter = ui.painter().clone().with_layer_id(wire_layer_id);
+    for shape in wire_shapes {
+        wire_painter.add(shape);
     }
-
-    // Record shape index before wire widgets so we can move them for z-ordering.
-    let wire_widget_start_idx = ui.ctx().graphics_mut(|g| g.entry(snarl_layer_id).next_idx());
 
     for info in wire_widgets {
         let wire_x_length = (info.from_pos.x - info.to_pos.x).abs();
@@ -1867,6 +1866,7 @@ where
                 ctx.gap,
             );
             let builder = UiBuilder::new()
+                .layer_id(wire_layer_id)
                 .max_rect(widget_rect)
                 .layout(Layout::default())
                 .id_salt(id);
@@ -1888,27 +1888,6 @@ where
                 );
             });
         }
-    }
-
-    // For BehindNodes, move wire widget shapes to the reserved slot so they
-    // render behind nodes (which were painted after the reservation).
-    if let Some(reserved_idx) = wire_widget_shape_idx {
-        let end_idx = ui.ctx().graphics_mut(|g| g.entry(snarl_layer_id).next_idx());
-
-        // Collect all shapes added by wire widgets, replacing them with Noop.
-        let mut widget_shapes = Vec::new();
-        ui.ctx().graphics_mut(|g| {
-            let paint_list = g.entry(snarl_layer_id);
-            for i in wire_widget_start_idx.0..end_idx.0 {
-                paint_list.mutate_shape(ShapeIdx(i), |cs| {
-                    let shape = std::mem::replace(&mut cs.shape, Shape::Noop);
-                    widget_shapes.push(shape);
-                });
-            }
-        });
-
-        // Place collected shapes at the reserved index (before nodes).
-        ui.painter().set(reserved_idx, Shape::Vec(widget_shapes));
     }
 
     ui.advance_cursor_after_rect(Rect::from_min_size(snarl_resp.rect.min, Vec2::ZERO));
