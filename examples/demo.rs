@@ -8,7 +8,8 @@ use egui_snarl::{
     InPin, InPinId, NodeId, OutPin, OutPinId, Snarl,
     ui::{
         AnyPins, ModifierClick, NodeLayout, PinContext, PinInfo, PinPlacement, SnarlConfig,
-        SnarlStyle, SnarlViewer, SnarlWidget, WireStyle, selected_nodes,
+        SnarlStyle, SnarlViewer, SnarlWidget, WireStyle, WireWidgetContext, WireWidgetDescriptor,
+        selected_nodes,
     },
 };
 
@@ -657,28 +658,79 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         }
     }
     
-    fn has_wire_widget(&mut self, from: &OutPinId, to: &InPinId, snarl: &Snarl<DemoNode>) -> bool {
-        let _ = to;
-        matches!(
-            snarl.node(from.node),
-            Some(DemoNode::Number(_) | DemoNode::ExprNode(_) | DemoNode::String(_))
-        )
+    fn wire_widgets(
+        &mut self,
+        from: &OutPinId,
+        _to: &InPinId,
+        snarl: &Snarl<DemoNode>,
+    ) -> Vec<WireWidgetDescriptor> {
+        match snarl.node(from.node) {
+            // Number and Expr wires: show value at 30% and type label at 70%.
+            Some(DemoNode::Number(_) | DemoNode::ExprNode(_)) => vec![
+                WireWidgetDescriptor::new(0.3),
+                WireWidgetDescriptor::new(0.7),
+            ],
+            // String wires: single widget at the midpoint.
+            Some(DemoNode::String(_)) => vec![WireWidgetDescriptor::default()],
+            _ => vec![],
+        }
     }
 
     fn show_wire_widget(
         &mut self,
+        index: usize,
+        context: &WireWidgetContext,
         from: &OutPin,
-        to: &InPin,
+        _to: &InPin,
         ui: &mut Ui,
         snarl: &mut Snarl<DemoNode>,
     ) {
-        let _ = to;
-        ui.label(match &snarl[from.id.node] {
-            DemoNode::Number(value) => format_float(*value),
-            DemoNode::ExprNode(expr_node) => format_float(expr_node.eval()),
-            DemoNode::String(value) => format!("{value:?}"),
-            _ => unreachable!(),
-        });
+        // Paint a small rounded background behind the label.
+        let bg = ui.visuals().window_fill;
+        let rounding = ui.visuals().widgets.noninteractive.corner_radius;
+        let _ = context; // pos/align/gap available if needed
+
+        let label = match (&snarl[from.id.node], index) {
+            (DemoNode::Number(value), 0) => format_float(*value),
+            (DemoNode::Number(_), _) => "num".into(),
+            (DemoNode::ExprNode(expr_node), 0) => format_float(expr_node.eval()),
+            (DemoNode::ExprNode(_), _) => "expr".into(),
+            (DemoNode::String(value), _) => format!("{value:?}"),
+            _ => return,
+        };
+
+        let galley = ui.painter().layout_no_wrap(
+            label,
+            ui.style().text_styles[&egui::TextStyle::Body].clone(),
+            ui.visuals().text_color(),
+        );
+        let padding = egui::vec2(4.0, 2.0);
+        let (rect, _) =
+            ui.allocate_exact_size(galley.size() + padding * 2.0, egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, rounding, bg);
+        ui.painter()
+            .galley(rect.min + padding, galley, Color32::PLACEHOLDER);
+    }
+
+    fn wire_interact(
+        &mut self,
+        from: &OutPinId,
+        _to: &InPinId,
+        response: &egui::Response,
+        snarl: &Snarl<DemoNode>,
+    ) -> bool {
+        // Show a tooltip describing the wire's data type when hovered.
+        if response.hovered() {
+            let type_name = match snarl.node(from.node) {
+                Some(DemoNode::Number(_) | DemoNode::ExprNode(_)) => "Number",
+                Some(DemoNode::String(_)) => "String",
+                Some(DemoNode::ShowImage(_)) => "Image",
+                _ => "Unknown",
+            };
+            response.clone().on_hover_text(format!("Wire type: {type_name}"));
+        }
+        false
     }
 }
 
