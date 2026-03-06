@@ -227,8 +227,18 @@ fn wire_bezier_5_horizontal(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 6] 
 /// Returns 5th degree bezier curve control points for vertical wires (pins on top/bottom).
 /// This creates Houdini-style connections where wires extend vertically from pins.
 fn wire_bezier_5_vertical(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 6] {
-    // For vertical wires, control points extend in Y direction instead of X
-    // from is typically output (top/bottom of node), to is typically input (top/bottom of another node)
+    // When target is above source, reverse the computation so the wire
+    // exits upward and enters downward, avoiding the overshoot loop.
+    if to.y < from.y {
+        let [a, b, c, d, e, f] = wire_bezier_5_vertical_down(frame_size, to, from);
+        return [f, e, d, c, b, a];
+    }
+    wire_bezier_5_vertical_down(frame_size, from, to)
+}
+
+/// Vertical wire bezier for the "forward" case where `to` is below `from`.
+fn wire_bezier_5_vertical_down(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 6] {
+    // Control points extend in Y direction: exit downward, enter upward.
     let from_norm_y = frame_size;
     let from_2 = pos2(from.x, from.y + from_norm_y);
     let to_norm_y = -from_norm_y;

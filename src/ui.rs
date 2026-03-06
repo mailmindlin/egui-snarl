@@ -643,6 +643,13 @@ pub struct SnarlStyle {
     )]
     pub wire_style: Option<WireStyle>,
 
+    /// Whether wires can be drawn vertically when the Y distance exceeds the X distance (Houdini-style).
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "Option::is_none", default)
+    )]
+    pub vertical_wires: Option<bool>,
+
     /// Layer where wires are rendered.
     #[cfg_attr(
         feature = "serde",
@@ -842,6 +849,10 @@ impl SnarlStyle {
         self.wire_style.unwrap_or(WireStyle::Bezier5)
     }
 
+    fn vertical_wires(&self) -> bool {
+        self.vertical_wires.unwrap_or(true)
+    }
+
     fn wire_layer(&self) -> WireLayer {
         self.wire_layer.unwrap_or(WireLayer::BehindNodes)
     }
@@ -994,6 +1005,7 @@ impl SnarlStyle {
             downscale_wire_frame: None,
             upscale_wire_frame: None,
             wire_style: None,
+            vertical_wires: None,
             wire_layer: None,
             header_drag_space: None,
             collapsible: None,
@@ -1450,9 +1462,11 @@ where
 
             if let Some(latest_pos) = latest_pos {
                 // Use vertical wire drawing when Y distance > X distance (Houdini-style)
-                let dx = (to_r.pos.x - from_r.pos.x).abs();
-                let dy = (to_r.pos.y - from_r.pos.y).abs();
-                let vertical_wire = dy > dx;
+                let vertical_wire = style.vertical_wires() && {
+                    let dx = (to_r.pos.x - from_r.pos.x).abs();
+                    let dy = (to_r.pos.y - from_r.pos.y).abs();
+                    dy > dx
+                };
 
                 let wire_hit = hit_wire(
                     ui.ctx(),
@@ -1493,9 +1507,11 @@ where
         }
 
         // Use vertical wire drawing when Y distance > X distance (Houdini-style)
-        let dx = (to_r.pos.x - from_r.pos.x).abs();
-        let dy = (to_r.pos.y - from_r.pos.y).abs();
-        let vertical_wire = dy > dx && false;
+        let vertical_wire = style.vertical_wires() && {
+            let dx = (to_r.pos.x - from_r.pos.x).abs();
+            let dy = (to_r.pos.y - from_r.pos.y).abs();
+            dy > dx
+        };
 
         draw_wire(
             &ui,
@@ -1713,9 +1729,11 @@ where
                 let to_r = &input_info[&in_pin];
 
                 // Use vertical wire drawing when Y distance > X distance
-                let dx = (to_r.pos.x - from_pos.x).abs();
-                let dy = (to_r.pos.y - from_pos.y).abs();
-                let vertical_wire = dy > dx;
+                let vertical_wire = style.vertical_wires() && {
+                    let dx = (to_r.pos.x - from_pos.x).abs();
+                    let dy = (to_r.pos.y - from_pos.y).abs();
+                    dy > dx
+                };
 
                 draw_wire(
                     &ui,
@@ -1739,9 +1757,11 @@ where
                 let to_pos = wire_end_pos;
 
                 // Use vertical wire drawing when Y distance > X distance
-                let dx = (to_pos.x - from_r.pos.x).abs();
-                let dy = (to_pos.y - from_r.pos.y).abs();
-                let vertical_wire = dy > dx;
+                let vertical_wire = style.vertical_wires() && {
+                    let dx = (to_pos.x - from_r.pos.x).abs();
+                    let dy = (to_pos.y - from_r.pos.y).abs();
+                    dy > dx
+                };
 
                 draw_wire(
                     &ui,
