@@ -1215,7 +1215,7 @@ impl SnarlWidget {
 }
 
 #[inline(never)]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn show_snarl<T, V>(
     snarl_id: Id,
     mut style: SnarlStyle,
@@ -1229,8 +1229,6 @@ fn show_snarl<T, V>(
 where
     V: SnarlViewer<T>,
 {
-    #![allow(clippy::too_many_lines)]
-
     let (mut latest_pos, input) = ui.ctx().input(|i| {
         (
             i.pointer.latest_pos(),
