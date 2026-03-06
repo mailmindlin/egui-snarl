@@ -1,6 +1,6 @@
 use core::f32;
 
-use egui::{Context, Id, Pos2, Rect, Shape, Stroke, Ui, ahash::HashMap, cache::CacheTrait, pos2};
+use egui::{Align2, Context, Id, Pos2, Rect, Shape, Stroke, Ui, ahash::HashMap, cache::CacheTrait, pos2};
 
 use crate::{InPinId, OutPinId};
 
