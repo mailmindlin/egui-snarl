@@ -1062,6 +1062,15 @@ where
         WireLayer::AboveNodes => None,
     };
 
+    // For BehindNodes, reserve a shape slot for wire widget content before
+    // nodes are drawn. After rendering wire widgets (which adds shapes at the
+    // end of the paint list), we move those shapes to this reserved slot so
+    // they appear behind nodes.
+    let wire_widget_shape_idx = match style.wire_layer() {
+        WireLayer::BehindNodes => Some(ui.painter().add(Shape::Noop)),
+        WireLayer::AboveNodes => None,
+    };
+
     let mut input_info = HashMap::new();
     let mut output_info = HashMap::new();
 
@@ -1376,6 +1385,96 @@ where
         Some(idx) => {
             ui.painter().set(idx, Shape::Vec(wire_shapes));
         }
+    }
+
+    // Record shape index before wire widgets so we can move them for z-ordering.
+    let wire_widget_start_idx = ui.ctx().graphics_mut(|g| g.entry(snarl_layer_id).next_idx());
+
+    for info in wire_widgets {
+        let wire_x_length = (info.from_pos.x - info.to_pos.x).abs();
+
+        for (index, descriptor) in info.descriptors.into_iter().enumerate() {
+            let center = point_on_wire(
+                wire_frame_size,
+                style.upscale_wire_frame(),
+                style.downscale_wire_frame(),
+                info.from_pos,
+                info.to_pos,
+                info.wire_style,
+                info.vertical,
+                descriptor.t,
+            );
+
+            let id = Id::new("wire-widget").with((info.out_pin.id, info.in_pin.id, index));
+            let cached = ui
+                .ctx()
+                .memory(|mem| mem.data.get_temp::<WireWidgetCache>(id));
+            let child_size = match cached {
+                Some(cached) => cached.widget_size,
+                None => Vec2::new(wire_x_length, 0.0),
+            };
+            let ctx = wire::WireWidgetContext {
+                t: descriptor.t,
+                pos: center,
+                align: descriptor
+                    .align
+                    .unwrap_or_else(|| style.wire_widget_align.unwrap_or(Align2::CENTER_CENTER)),
+                gap: descriptor
+                    .gap
+                    .unwrap_or_else(|| style.wire_widget_gap.unwrap_or(0.0)),
+            };
+            let widget_rect = RectAlign {
+                parent: Align2::CENTER_CENTER,
+                child: ctx.align,
+            }
+            .align_rect(
+                &Rect::from_center_size(center, [wire_x_length, 0.0].into()),
+                child_size,
+                ctx.gap,
+            );
+            let builder = UiBuilder::new()
+                .max_rect(widget_rect)
+                .layout(Layout::default())
+                .id_salt(id);
+            let mut wire_ui = ui.new_child(builder);
+            viewer.show_wire_widget(
+                index,
+                &ctx,
+                info.out_pin,
+                info.in_pin,
+                &mut wire_ui,
+                snarl,
+            );
+            ui.ctx().memory_mut(|mem| {
+                mem.data.insert_temp(
+                    id,
+                    WireWidgetCache {
+                        widget_size: wire_ui.min_rect().size(),
+                    },
+                );
+            });
+        }
+    }
+
+    // For BehindNodes, move wire widget shapes to the reserved slot so they
+    // render behind nodes (which were painted after the reservation).
+    if let Some(reserved_idx) = wire_widget_shape_idx {
+        let end_idx = ui.ctx().graphics_mut(|g| g.entry(snarl_layer_id).next_idx());
+
+        // Collect all shapes added by wire widgets, replacing them with Noop.
+        let mut widget_shapes = Vec::new();
+        ui.ctx().graphics_mut(|g| {
+            let paint_list = g.entry(snarl_layer_id);
+            for i in wire_widget_start_idx.0..end_idx.0 {
+                paint_list.mutate_shape(ShapeIdx(i), |cs| {
+                    let shape = std::mem::replace(&mut cs.shape, Shape::Noop);
+                    widget_shapes.push(shape);
+                });
+            }
+        });
+
+        // Place collected shapes at the reserved index (before nodes).
+        ui.painter().set(reserved_idx, Shape::Vec(widget_shapes));
     }
 
     ui.advance_cursor_after_rect(Rect::from_min_size(snarl_resp.rect.min, Vec2::ZERO));
