@@ -656,6 +656,30 @@ impl SnarlViewer<DemoNode> for DemoViewer {
             DemoNode::ExprNode(_) => frame.fill(egui::Color32::from_rgb(70, 66, 40)),
         }
     }
+    
+    fn has_wire_widget(&mut self, from: &OutPinId, to: &InPinId, snarl: &Snarl<DemoNode>) -> bool {
+        let _ = to;
+        matches!(
+            snarl.node(from.node),
+            Some(DemoNode::Number(_) | DemoNode::ExprNode(_) | DemoNode::String(_))
+        )
+    }
+
+    fn show_wire_widget(
+        &mut self,
+        from: &OutPin,
+        to: &InPin,
+        ui: &mut Ui,
+        snarl: &mut Snarl<DemoNode>,
+    ) {
+        let _ = to;
+        ui.label(match &snarl[from.id.node] {
+            DemoNode::Number(value) => format_float(*value),
+            DemoNode::ExprNode(expr_node) => format_float(expr_node.eval()),
+            DemoNode::String(value) => format!("{value:?}"),
+            _ => unreachable!(),
+        });
+    }
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
