@@ -1496,7 +1496,7 @@ where
         // Use vertical wire drawing when Y distance > X distance (Houdini-style)
         let dx = (to_r.pos.x - from_r.pos.x).abs();
         let dy = (to_r.pos.y - from_r.pos.y).abs();
-        let vertical_wire = dy > dx;
+        let vertical_wire = dy > dx && false;
 
         draw_wire(
             &ui,
@@ -1776,26 +1776,16 @@ where
         let cached = ui
             .ctx()
             .memory(|mem| mem.data.get_temp::<WireWidgetCache>(id));
-        let widget_rect = cached.map_or_else(
-            || {
-                RectAlign {
-                    parent: Align2::CENTER_CENTER,
-                    child: style.wire_widget_align.unwrap_or(Align2::CENTER_CENTER),
-                }
-                .align_rect(
-                    &Rect::from_center_size(center, [wire_x_length, 0.0].into()),
-                    Vec2::new(wire_x_length, 0.0),
-                    style.wire_widget_gap.unwrap_or(0.0),
-                )
-            },
-            |cached| {
-                #[allow(clippy::float_cmp)]
-                if cached.wire_len == wire_x_length {
-                    cached.widget_rect
-                } else {
-                    // calculate a new rect if the wire length has been changed due to user moving
-                    // the nodes connected by the wire
+        // Use the cached widget size if available, but always re-center at the
+        // current wire midpoint. Returning the cached absolute rect directly
+        // causes the widget to lag behind when nodes are dragged.
 
+        let widget_rect = cached
+            // calculate a new rect if the wire length has been changed due to user moving
+            // the nodes connected by the wire
+            .filter(|cached| cached.wire_len == wire_x_length)
+            .map_or_else(
+                || {
                     RectAlign {
                         parent: Align2::CENTER_CENTER,
                         child: style.wire_widget_align.unwrap_or(Align2::CENTER_CENTER),
@@ -1805,9 +1795,9 @@ where
                         Vec2::new(wire_x_length, 0.0),
                         style.wire_widget_gap.unwrap_or(0.0),
                     )
-                }
-            },
-        );
+                },
+                |cached| cached.widget_rect
+            );
         let mut wire_ui = ui.new_child(
             UiBuilder::new()
                 .max_rect(widget_rect)
