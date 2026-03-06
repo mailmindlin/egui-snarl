@@ -1014,6 +1014,7 @@ impl App for DemoApp {
         egui::SidePanel::left("style").show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui_probe::Probe::new(&mut self.style).show(ui);
+                egui_probe::Probe::new(&mut self.config).show(ui);
             });
         });
 

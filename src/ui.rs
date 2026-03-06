@@ -1071,6 +1071,15 @@ where
         WireLayer::AboveNodes => None,
     };
 
+    // For BehindNodes, reserve a shape slot for wire widget content before
+    // nodes are drawn. After rendering wire widgets (which adds shapes at the
+    // end of the paint list), we move those shapes to this reserved slot so
+    // they appear behind nodes.
+    let wire_widget_shape_idx = match style.wire_layer() {
+        WireLayer::BehindNodes => Some(ui.painter().add(Shape::Noop)),
+        WireLayer::AboveNodes => None,
+    };
+
     let mut input_info = HashMap::new();
     let mut output_info = HashMap::new();
 
