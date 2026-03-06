@@ -154,8 +154,7 @@ impl NodeLayoutKind {
 /// Cache params for wire widget
 #[derive(Clone)]
 pub struct WireWidgetCache {
-    widget_rect: Rect,
-    wire_len: f32,
+    widget_size: Vec2,
 }
 
 /// Controls how node elements are laid out.
@@ -1776,28 +1775,19 @@ where
         let cached = ui
             .ctx()
             .memory(|mem| mem.data.get_temp::<WireWidgetCache>(id));
-        // Use the cached widget size if available, but always re-center at the
-        // current wire midpoint. Returning the cached absolute rect directly
-        // causes the widget to lag behind when nodes are dragged.
-
-        let widget_rect = cached
-            // calculate a new rect if the wire length has been changed due to user moving
-            // the nodes connected by the wire
-            .filter(|cached| cached.wire_len == wire_x_length)
-            .map_or_else(
-                || {
-                    RectAlign {
-                        parent: Align2::CENTER_CENTER,
-                        child: style.wire_widget_align.unwrap_or(Align2::CENTER_CENTER),
-                    }
-                    .align_rect(
-                        &Rect::from_center_size(center, [wire_x_length, 0.0].into()),
-                        Vec2::new(wire_x_length, 0.0),
-                        style.wire_widget_gap.unwrap_or(0.0),
-                    )
-                },
-                |cached| cached.widget_rect
-            );
+        let child_size = match cached {
+            Some(cached) => cached.widget_size,
+            None => Vec2::new(wire_x_length, 0.0)
+        };
+        let widget_rect = RectAlign {
+            parent: Align2::CENTER_CENTER,
+            child: style.wire_widget_align.unwrap_or(Align2::CENTER_CENTER),
+        }
+        .align_rect(
+            &Rect::from_center_size(center, [wire_x_length, 0.0].into()),
+            child_size,
+            style.wire_widget_gap.unwrap_or(0.0),
+        );
         let mut wire_ui = ui.new_child(
             UiBuilder::new()
                 .max_rect(widget_rect)
@@ -1809,11 +1799,7 @@ where
             mem.data.insert_temp(
                 id,
                 WireWidgetCache {
-                    widget_rect: Rect::from_center_size(
-                        center,
-                        Vec2::new(wire_ui.min_rect().width(), wire_ui.min_rect().height()),
-                    ),
-                    wire_len: wire_x_length,
+                    widget_size: wire_ui.min_rect().size(),
                 },
             );
         });
