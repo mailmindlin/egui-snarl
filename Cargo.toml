@@ -19,6 +19,7 @@ serde = { version = "1" }
 serde_json = { version = "1" }
 
 egui-probe = { version = "0.10.0" }
+facet = { version = "0.31" }
 egui-scale = { version = "0.3.0" }
 wasm-bindgen-futures = "0.4"
 web-sys = "0.3.81"
