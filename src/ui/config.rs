@@ -205,6 +205,7 @@ impl SnapGrid {
     }
 
     fn draw_quad(&self, viewport: &Rect, painter: &Painter, color: Color32, point_size: f32) {
+        #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let min_x = (viewport.min.x / self.size).floor() as i32;
         let max_x = (viewport.max.x / self.size).ceil() as i32;
         let min_y = (viewport.min.y / self.size).floor() as i32;
@@ -220,6 +221,7 @@ impl SnapGrid {
     }
 
     fn draw_hex_pointy(&self, viewport: &Rect, painter: &Painter, color: Color32, point_size: f32) {
+        #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let vert_spacing = self.size * 0.866_025_4; // sqrt(3)/2
         let horiz_spacing = self.size;
 
@@ -247,6 +249,7 @@ impl SnapGrid {
     }
 
     fn draw_hex_flat(&self, viewport: &Rect, painter: &Painter, color: Color32, point_size: f32) {
+        #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let horiz_spacing = self.size * 0.866_025_4; // sqrt(3)/2
         let vert_spacing = self.size;
 

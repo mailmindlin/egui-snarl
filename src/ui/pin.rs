@@ -9,6 +9,7 @@ use super::{SnarlStyle, WireStyle};
 /// This struct is passed to `show_input` and `show_output` methods to inform
 /// the viewer about the current UI state and whether labels should be visible.
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct PinContext {
     /// Whether the label should be visible based on current UI state and style settings.
     pub label_visible: bool,
