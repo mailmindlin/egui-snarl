@@ -10,9 +10,10 @@ use crate::{InPinId, NodeId, OutPinId, Snarl};
 
 use super::{SnarlWidget, transform_matching_points};
 
+/// Row heights for pin rows (used in horizontal layouts).
 pub type RowHeights = SmallVec<[f32; 8]>;
 
-/// Type alias for column widths (used in vertical layouts).
+/// Column widths for pin columns (used in vertical layouts).
 pub type ColumnWidths = SmallVec<[f32; 8]>;
 
 /// Node UI state.
@@ -101,6 +102,7 @@ impl NodeState {
         .round_ui()
     }
 
+    /// Vertical offset for the node payload area during collapse/expand animation.
     pub fn payload_offset(&self, openness: f32) -> f32 {
         ((self.size.y) * (1.0 - openness)).round_ui()
     }
@@ -207,13 +209,18 @@ struct RectSelect {
     current: Pos2,
 }
 
+/// Persistent UI state for the entire snarl graph editor.
+///
+/// Stores viewport transform, selection state, draw order, and in-progress wire drags.
+/// Loaded from and saved to egui temp storage each frame.
 pub struct SnarlState {
     /// Snarl viewport transform to global space.
     to_global: TSTransform,
 
     new_wires: Option<NewWires>,
 
-    /// Flag indicating that new wires are owned by the menu now.
+    /// When true, the new wires have been handed off to a context menu
+    /// and should not be treated as an active drag.
     new_wires_menu: bool,
 
     id: Id,
@@ -410,6 +417,7 @@ impl SnarlState {
         }
     }
 
+    /// Adjusts the viewport transform to fit `view` (in graph space) within `ui_rect`.
     pub fn look_at(&mut self, view: Rect, ui_rect: Rect, min_scale: f32, max_scale: f32) {
         let scaling2 = ui_rect.size() / view.size();
         let scaling = scaling2.min_elem().clamp(min_scale, max_scale);
@@ -494,6 +502,7 @@ impl SnarlState {
         }
     }
 
+    /// Returns true if wires are actively being dragged (not yet handed off to a menu).
     pub const fn has_new_wires(&self) -> bool {
         matches!(
             (self.new_wires.as_ref(), self.new_wires_menu),
@@ -542,6 +551,7 @@ impl SnarlState {
         }
     }
 
+    /// Transfers wire ownership to the context menu (e.g., when dropping on empty space).
     pub(crate) fn set_new_wires_menu(&mut self, wires: NewWires) {
         debug_assert!(self.new_wires.is_none());
         self.new_wires = Some(wires);
@@ -582,6 +592,8 @@ impl SnarlState {
         &self.selected_nodes
     }
 
+    /// Selects a node. If `reset` is true, deselects all others first (like a click).
+    /// If `reset` is false, adds to the existing selection (like ctrl+click).
     pub fn select_one_node(&mut self, reset: bool, node: NodeId) {
         if reset {
             if self.selected_nodes[..] == [node] {
