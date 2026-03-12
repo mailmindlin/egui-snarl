@@ -1,4 +1,5 @@
 //! This module provides functionality for showing [`Snarl`] graph in [`Ui`].
+#![allow(clippy::match_same_arms)]
 
 use std::{collections::HashMap, hash::Hash};
 

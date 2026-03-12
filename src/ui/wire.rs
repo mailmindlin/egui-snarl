@@ -227,6 +227,7 @@ fn wire_bezier_5_horizontal(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 6] 
 /// Returns 5th degree bezier curve control points for vertical wires (pins on top/bottom).
 /// This creates Houdini-style connections where wires extend vertically from pins.
 fn wire_bezier_5_vertical(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 6] {
+    #![allow(clippy::many_single_char_names)]
     // When target is above source, reverse the computation so the wire
     // exits upward and enters downward, avoiding the overshoot loop.
     if to.y < from.y {
@@ -1566,6 +1567,7 @@ pub struct WireWidgetContext {
 /// **not** uniform with respect to arc length. For axis-aligned wires, `t` is
 /// interpolated by arc length so that `t = 0.5` falls at the visual midpoint.
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 pub fn point_on_wire(
     frame_size: f32,
     upscale: bool,
