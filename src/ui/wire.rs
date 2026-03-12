@@ -1,8 +1,11 @@
 use core::f32;
+use std::fmt::Debug;
 
-use egui::{Align2, Context, Id, Pos2, Rect, Shape, Stroke, Ui, ahash::HashMap, cache::CacheTrait, pos2};
+use egui::{Align2, Color32, Context, Id, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, ahash::HashMap, cache::CacheTrait, pos2};
 
-use crate::{InPinId, OutPinId};
+use crate::{GroupId, InPin, InPinId, OutPin, OutPinId, Snarl, Wire, ui::{WireWidgetInfo, mix_colors, nearest_rect_edge, state::GroupState}};
+
+use super::{PinResponse, SnarlConfig, SnarlStyle, SnarlViewer, state::SnarlState};
 
 const MAX_CURVE_SAMPLES: usize = 100;
 
@@ -377,6 +380,233 @@ fn wire_bezier_3(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 4] {
 fn wire_bezier_3_vertical(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 4] {
     let [a, b, _, _, c, d] = wire_bezier_5_vertical(frame_size, from, to);
     [a, b, c, d]
+}
+
+pub(super) struct WireInfo {
+    pub output_pins: std::collections::HashMap<OutPinId, OutPin>,
+    pub output_info: std::collections::HashMap<OutPinId, PinResponse>,
+    pub input_pins: std::collections::HashMap<InPinId, InPin>,
+    pub input_info: std::collections::HashMap<InPinId, PinResponse>,
+    pub wire_frame_size: f32,
+    pub wire_width: f32,
+    pub latest_pos: Option<Pos2>,
+    pub wire_threshold: f32,
+}
+
+#[derive(Default)]
+pub(super) struct WireResponse<'a> {
+    pub hovered_wire: Option<Wire>,
+    pub hovered_wire_disconnect: bool,
+    pub wire_shapes: Vec<Shape>,
+    pub wire_widgets: Vec<WireWidgetInfo<'a>>,
+}
+
+pub fn show_wire<'a, T, G, V>(
+    wire: Wire,
+    snarl: &Snarl<T, G>,
+    viewer: &mut V,
+    ui: &mut Ui,
+    snarl_id: Id,
+    snarl_state: &SnarlState,
+    style: &SnarlStyle,
+    config: &SnarlConfig,
+    snarl_resp: &Response,
+    info: &'a WireInfo,
+    resp: &mut WireResponse<'a>,
+) -> Option<()>
+where
+    V: SnarlViewer<T, G>
+{
+    enum WireEndpoint<'a> {
+        CollapsedGroup(GroupId),
+        Pin(&'a PinResponse)
+    }
+
+    impl Debug for WireEndpoint<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::CollapsedGroup(arg0) => f.debug_tuple("CollapsedGroup").field(&arg0.0).finish(),
+                Self::Pin(..) => f.debug_tuple("Pin").finish_non_exhaustive(),
+            }
+        }
+    }
+
+    // Resolve wire endpoints — either from rendered pin info, or rerouted to collapsed group edge
+    let from_pin = if let Some(pin) = info.output_info.get(&wire.out_pin) {
+        debug_assert!(snarl.node_collapsed_group(wire.out_pin.node).is_none());
+        WireEndpoint::Pin(pin)
+    } else {
+        let collapsed_group = snarl.node_collapsed_group(wire.out_pin.node)?;
+        WireEndpoint::CollapsedGroup(collapsed_group)
+    };
+
+    let to_pin = if let Some(pin) = info.input_info.get(&wire.in_pin) {
+        debug_assert!(snarl.node_collapsed_group(wire.in_pin.node).is_none());
+        WireEndpoint::Pin(pin)
+    } else {
+        let collapsed_group = snarl.node_collapsed_group(wire.in_pin.node)?;
+        // If both ends are hidden in the same collapsed group, skip the wire entirely
+        if let WireEndpoint::CollapsedGroup(from_group) = from_pin && from_group == collapsed_group {
+            return None;
+        }
+        WireEndpoint::CollapsedGroup(collapsed_group)
+    };
+    println!("Render wire {from_pin:?} => {to_pin:?}");
+
+    // Resolve initial positions (center for group-rerouted, actual for visible pins)
+    let base_pos = |endpoint: &WireEndpoint| -> Option<(Pos2, Option<Rect>)> {
+        Some(match endpoint {
+            WireEndpoint::Pin(pin) => (pin.pos, None),
+            WireEndpoint::CollapsedGroup(group_id) => {
+                // Load collapsed group rects if needed
+                let gs = GroupState::load(ui.ctx(), snarl_id, *group_id);
+                let r = gs.rect();
+                gs.store(ui.ctx());
+                if !r.is_finite() {
+                    return None;
+                }
+                (r.center(), Some(r))
+            },
+        })
+    };
+    let (from_base_pos, from_rect) = base_pos(&from_pin)?;
+    let (to_base_pos, to_rect) = base_pos(&to_pin)?;
+
+    // For group-rerouted endpoints, project to nearest edge toward the other endpoint
+    let from_pos = match from_rect {
+        Some(rect) => nearest_rect_edge(rect, to_base_pos),
+        None => from_base_pos,
+    };
+    let to_pos = match to_rect {
+        Some(rect) => nearest_rect_edge(rect, from_base_pos),
+        None => to_base_pos,
+    };
+
+    println!("\tpos {from_base_pos}/{from_rect:?}/{from_pos} => {from_base_pos}/{from_rect:?}/{from_pos}");
+
+    let from_r_owned;
+    let from_r = match from_pin {
+        WireEndpoint::Pin(r) => r,
+        WireEndpoint::CollapsedGroup(..) => {
+            from_r_owned = PinResponse {
+                pos: from_pos,
+                wire_color: Color32::GRAY,
+                wire_style: WireStyle::default(),
+            };
+            &from_r_owned
+        }
+    };
+
+    let to_r_owned;
+    let to_r = match to_pin {
+        WireEndpoint::Pin(r) => r,
+        WireEndpoint::CollapsedGroup(..) => {
+            to_r_owned = PinResponse {
+                pos: to_pos,
+                wire_color: Color32::GRAY,
+                wire_style: WireStyle::default(),
+            };
+            &to_r_owned
+        }
+    };
+
+    // For interaction and wire widgets, we need the actual pin objects.
+    // These are only available for visible nodes.
+    let out_pin = info.output_pins.get(&wire.out_pin);
+    let in_pin = info.input_pins.get(&wire.in_pin);
+
+    if !snarl_state.has_new_wires() && snarl_resp.contains_pointer() && resp.hovered_wire.is_none() {
+        // Try to find hovered wire
+        // If not dragging new wire
+        // And not hovering over item above.
+
+        if let Some(latest_pos) = info.latest_pos {
+            // Use vertical wire drawing when Y distance > X distance (Houdini-style)
+            let wire_hit = hit_wire(
+                ui.ctx(),
+                WireId::Connected {
+                    snarl_id,
+                    out_pin: wire.out_pin,
+                    in_pin: wire.in_pin,
+                },
+                info.wire_frame_size,
+                style.upscale_wire_frame(),
+                style.downscale_wire_frame(),
+                from_r.pos,
+                to_r.pos,
+                latest_pos,
+                info.wire_width.max(2.0),
+                pick_wire_style(from_r.wire_style, to_r.wire_style),
+                style.vertical_wire(from_r.pos, to_r.pos),
+            );
+
+            if wire_hit {
+                resp.hovered_wire = Some(wire);
+
+                let wire_r =
+                    ui.interact(snarl_resp.rect, ui.make_persistent_id(wire), Sense::click());
+
+                let suppress = viewer.wire_interact(
+                    &wire.out_pin,
+                    &wire.in_pin,
+                    &wire_r,
+                    snarl,
+                );
+
+                //Remove hovered wire by second click
+                if !suppress {
+                    resp.hovered_wire_disconnect |=
+                        wire_r.clicked_by(config.remove_hovered_wire.mouse_button);
+                }
+            }
+        }
+    }
+
+    let color = mix_colors(from_r.wire_color, to_r.wire_color);
+
+    let mut draw_width = info.wire_width;
+    if resp.hovered_wire == Some(wire) {
+        draw_width *= 1.5;
+    }
+
+    // Use vertical wire drawing when Y distance > X distance (Houdini-style)
+    let vertical_wire = style.vertical_wire(from_r.pos, to_r.pos);
+
+    draw_wire(
+        &ui,
+        WireId::Connected {
+            snarl_id,
+            out_pin: wire.out_pin,
+            in_pin: wire.in_pin,
+        },
+        &mut resp.wire_shapes,
+        info.wire_frame_size,
+        style.upscale_wire_frame(),
+        style.downscale_wire_frame(),
+        from_r.pos,
+        to_r.pos,
+        Stroke::new(draw_width, color),
+        info.wire_threshold,
+        pick_wire_style(from_r.wire_style, to_r.wire_style),
+        vertical_wire,
+    );
+    // Wire widgets only work when both pins are visible (not rerouted to collapsed groups)
+    if let (Some(out_pin), Some(in_pin)) = (out_pin, in_pin) {
+        let descriptors = viewer.wire_widgets(&wire.out_pin, &wire.in_pin, snarl);
+        if !descriptors.is_empty() {
+            resp.wire_widgets.push(WireWidgetInfo {
+                out_pin,
+                in_pin,
+                from_pos: from_r.pos,
+                to_pos: to_r.pos,
+                wire_style: pick_wire_style(from_r.wire_style, to_r.wire_style),
+                vertical: vertical_wire,
+                descriptors,
+            });
+        }
+    }
+
+    Some(())
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -6,7 +6,7 @@ use egui::{
 };
 use smallvec::{SmallVec, ToSmallVec, smallvec};
 
-use crate::{InPinId, NodeId, OutPinId, Snarl};
+use crate::{GroupId, InPinId, NodeId, OutPinId, Snarl};
 
 use super::{SnarlWidget, transform_matching_points};
 
@@ -198,6 +198,85 @@ impl NodeState {
     }
 }
 
+/// Group UI state.
+/// Stores the cached bounding rect and collapsed position.
+#[derive(Debug)]
+pub struct GroupState {
+    /// Cached bounding rect from the previous frame.
+    cached_rect: Rect,
+    /// Position used when the group is collapsed.
+    collapsed_pos: Option<Pos2>,
+    id: Id,
+    dirty: bool,
+}
+
+#[derive(Clone, PartialEq)]
+struct GroupData {
+    cached_rect: Rect,
+    collapsed_pos: Option<Pos2>,
+}
+
+impl GroupState {
+    const fn initial(id: Id) -> Self {
+        GroupState {
+            cached_rect: Rect::NOTHING,
+            collapsed_pos: None,
+            id,
+            dirty: true,
+        }
+    }
+
+    pub fn load(cx: &Context, snarl_id: Id, group: GroupId) -> Self {
+        let id = snarl_id.with(("group", group));
+        let data = cx.data(|d| d.get_temp::<GroupData>(id));
+        match data {
+            Some(GroupData { cached_rect, collapsed_pos }) => GroupState {
+                cached_rect,
+                collapsed_pos,
+                id,
+                dirty: false,
+            },
+            None => Self::initial(id),
+        }
+    }
+
+    pub fn store(self, cx: &Context) {
+        if self.dirty {
+            cx.data_mut(|d| {
+                d.insert_temp(
+                    self.id,
+                    GroupData {
+                        cached_rect: self.cached_rect,
+                        collapsed_pos: self.collapsed_pos,
+                    },
+                );
+            });
+            cx.request_repaint();
+        }
+    }
+    
+    pub const fn rect(&self) -> Rect {
+        self.cached_rect
+    }
+
+    pub fn set_rect(&mut self, rect: Rect) {
+        if self.cached_rect != rect {
+            self.cached_rect = rect;
+            self.dirty = true;
+        }
+    }
+    
+    pub fn collapsed_pos(&self) -> Option<Pos2> {
+        self.collapsed_pos
+    }
+
+    pub fn set_collapsed_pos(&mut self, pos: Pos2) {
+        self.collapsed_pos = Some(pos);
+        self.dirty = true;
+    }
+}
+
+/// Wires currently being dragged from pins.
 #[derive(Clone)]
 pub enum NewWires {
     /// Dragging from input pins — looking for an output to connect to.
@@ -240,6 +319,12 @@ pub struct SnarlState {
     /// List of currently selected nodes.
     selected_nodes: SmallVec<[NodeId; 8]>,
 
+    /// Order of groups to draw (back-to-front, parent before child).
+    group_draw_order: Vec<GroupId>,
+
+    /// List of currently selected groups.
+    selected_groups: SmallVec<[GroupId; 4]>,
+
     /// The center of the UI rect, used to track container movement.
     ui_rect_center: Pos2,
 }
@@ -248,6 +333,44 @@ pub struct SnarlState {
 struct DrawOrder(Vec<NodeId>);
 
 impl DrawOrder {
+    fn save(self, cx: &Context, id: Id) {
+        cx.data_mut(|d| {
+            if self.0.is_empty() {
+                d.remove_temp::<Self>(id);
+            } else {
+                d.insert_temp::<Self>(id, self);
+            }
+        });
+    }
+
+    fn load(cx: &Context, id: Id) -> Self {
+        cx.data(|d| d.get_temp::<Self>(id)).unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Default)]
+struct GroupDrawOrder(Vec<GroupId>);
+
+impl GroupDrawOrder {
+    fn save(self, cx: &Context, id: Id) {
+        cx.data_mut(|d| {
+            if self.0.is_empty() {
+                d.remove_temp::<Self>(id);
+            } else {
+                d.insert_temp::<Self>(id, self);
+            }
+        });
+    }
+
+    fn load(cx: &Context, id: Id) -> Self {
+        cx.data(|d| d.get_temp::<Self>(id)).unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Default)]
+struct SelectedGroups(SmallVec<[GroupId; 4]>);
+
+impl SelectedGroups {
     fn save(self, cx: &Context, id: Id) {
         cx.data_mut(|d| {
             if self.0.is_empty() {
@@ -306,17 +429,60 @@ impl SnarlStateData {
     }
 }
 
-fn prune_selected_nodes<T>(selected_nodes: &mut SmallVec<[NodeId; 8]>, snarl: &Snarl<T>) -> bool {
+/// Nodes currently being dragged — persisted in egui temp storage across frames
+/// so group rendering (which runs before node rendering) can exclude them from bounding rect computation.
+#[derive(Clone, Default)]
+pub(crate) struct DraggedNodes(pub SmallVec<[NodeId; 4]>);
+
+impl DraggedNodes {
+    fn save(self, cx: &Context, id: Id) {
+        cx.data_mut(|d| {
+            if self.0.is_empty() {
+                d.remove_temp::<Self>(id);
+            } else {
+                d.insert_temp::<Self>(id, self);
+            }
+        });
+    }
+
+    fn load(cx: &Context, id: Id) -> Self {
+        cx.data(|d| d.get_temp::<Self>(id)).unwrap_or_default()
+    }
+}
+
+/// Groups currently being dragged — persisted in egui temp storage across frames
+/// so parent groups can exclude them from bounding rect computation.
+#[derive(Clone, Default)]
+pub(crate) struct DraggedGroupIds(pub SmallVec<[GroupId; 4]>);
+
+impl DraggedGroupIds {
+    fn save(self, cx: &Context, id: Id) {
+        cx.data_mut(|d| {
+            if self.0.is_empty() {
+                d.remove_temp::<Self>(id);
+            } else {
+                d.insert_temp::<Self>(id, self);
+            }
+        });
+    }
+
+    fn load(cx: &Context, id: Id) -> Self {
+        cx.data(|d| d.get_temp::<Self>(id)).unwrap_or_default()
+    }
+}
+
+/// Removes deleted nodes from the selection. Returns true if any were pruned.
+fn prune_selected_nodes<T, G>(selected_nodes: &mut SmallVec<[NodeId; 8]>, snarl: &Snarl<T, G>) -> bool {
     let old_size = selected_nodes.len();
     selected_nodes.retain(|node| snarl.nodes.contains(node.0));
     old_size != selected_nodes.len()
 }
 
 impl SnarlState {
-    pub fn load<T>(
+    pub fn load<T, G>(
         cx: &Context,
         id: Id,
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
         ui_rect: Rect,
         min_scale: f32,
         max_scale: f32,
@@ -330,6 +496,8 @@ impl SnarlState {
         let mut dirty = prune_selected_nodes(&mut selected_nodes, snarl);
 
         let draw_order = DrawOrder::load(cx, id).0;
+        let group_draw_order = GroupDrawOrder::load(cx, id).0;
+        let selected_groups = SelectedGroups::load(cx, id).0;
 
         // Adjust transform if the UI rect center has moved (e.g., window was dragged).
         // This ensures nodes follow the container when it moves.
@@ -350,11 +518,13 @@ impl SnarlState {
             rect_selection: data.rect_selection,
             draw_order,
             selected_nodes,
+            group_draw_order,
+            selected_groups,
             ui_rect_center,
         }
     }
 
-    fn initial<T>(id: Id, snarl: &Snarl<T>, ui_rect: Rect, min_scale: f32, max_scale: f32) -> Self {
+    fn initial<T, G>(id: Id, snarl: &Snarl<T, G>, ui_rect: Rect, min_scale: f32, max_scale: f32) -> Self {
         let mut bb = Rect::NOTHING;
 
         for (_, node) in &snarl.nodes {
@@ -383,13 +553,15 @@ impl SnarlState {
             dirty: true,
             draw_order: Vec::new(),
             rect_selection: None,
+            group_draw_order: Vec::new(),
+            selected_groups: SmallVec::new(),
             ui_rect_center,
             selected_nodes: SmallVec::new(),
         }
     }
 
     #[inline(always)]
-    pub fn store<T>(mut self, snarl: &Snarl<T>, cx: &Context) {
+    pub fn store<T, G>(mut self, snarl: &Snarl<T, G>, cx: &Context) {
         self.dirty |= prune_selected_nodes(&mut self.selected_nodes, snarl);
 
         if self.dirty {
@@ -404,6 +576,8 @@ impl SnarlState {
 
             DrawOrder(self.draw_order).save(cx, self.id);
             SelectedNodes(self.selected_nodes).save(cx, self.id);
+            GroupDrawOrder(self.group_draw_order).save(cx, self.id);
+            SelectedGroups(self.selected_groups).save(cx, self.id);
 
             cx.request_repaint();
         }
@@ -561,7 +735,8 @@ impl SnarlState {
         self.new_wires_menu = true;
     }
 
-    pub(crate) fn update_draw_order<T>(&mut self, snarl: &Snarl<T>) -> Vec<NodeId> {
+    /// Syncs draw order with the current set of nodes, appending new nodes to the top.
+    pub(crate) fn update_draw_order<T, G>(&mut self, snarl: &Snarl<T, G>) -> Vec<NodeId> {
         let mut node_ids = snarl
             .nodes
             .iter()
@@ -673,6 +848,95 @@ impl SnarlState {
         let rect = self.rect_selection?;
         Some(Rect::from_two_pos(rect.origin, rect.current))
     }
+
+    // --- Group state methods ---
+
+    pub fn selected_groups(&self) -> &[GroupId] {
+        &self.selected_groups
+    }
+
+    pub fn select_group(&mut self, group: GroupId) {
+        if !self.selected_groups.contains(&group) {
+            self.selected_groups.push(group);
+            self.dirty = true;
+        }
+    }
+
+    pub fn deselect_group(&mut self, group: GroupId) {
+        if let Some(pos) = self.selected_groups.iter().position(|g| *g == group) {
+            self.selected_groups.remove(pos);
+            self.dirty = true;
+        }
+    }
+
+    pub fn deselect_all_groups(&mut self) {
+        self.dirty |= !self.selected_groups.is_empty();
+        self.selected_groups.clear();
+    }
+
+    pub(crate) fn group_to_top(&mut self, group: GroupId) {
+        if let Some(pos) = self.group_draw_order.iter().position(|g| *g == group) {
+            self.group_draw_order.remove(pos);
+            self.group_draw_order.push(group);
+        }
+        self.dirty = true;
+    }
+
+    /// Updates group draw order, sorted by nesting depth (parents first).
+    pub(crate) fn update_group_draw_order<T, G>(&mut self, snarl: &Snarl<T, G>) -> Vec<GroupId> {
+        let group_ids: HashSet<GroupId> = snarl
+            .groups()
+            .map(|(id, _)| id)
+            .collect();
+
+        // Remove stale groups
+        self.group_draw_order.retain(|id| group_ids.contains(id));
+
+        // Add new groups
+        for id in &group_ids {
+            if !self.group_draw_order.contains(id) {
+                self.group_draw_order.push(*id);
+                self.dirty = true;
+            }
+        }
+
+        // Sort by depth (parents before children) for correct rendering order
+        let order = &mut self.group_draw_order;
+        order.sort_by_key(|id| {
+            let mut depth = 0u32;
+            let mut current = snarl.group_info(*id).and_then(|g| g.parent);
+            while let Some(pid) = current {
+                depth += 1;
+                current = snarl.group_info(pid).and_then(|g| g.parent);
+            }
+            depth
+        });
+
+        // Prune selected groups
+        self.selected_groups.retain(|g| group_ids.contains(g));
+
+        order.clone()
+    }
+
+    /// Get the set of nodes currently being dragged (from previous frame).
+    pub(crate) fn dragged_nodes(&self, cx: &Context) -> SmallVec<[NodeId; 4]> {
+        DraggedNodes::load(cx, self.id).0
+    }
+
+    /// Set the nodes currently being dragged (persisted for next frame's group rendering).
+    pub(crate) fn set_dragged_nodes(&self, cx: &Context, nodes: SmallVec<[NodeId; 4]>) {
+        DraggedNodes(nodes).save(cx, self.id);
+    }
+
+    /// Get the set of groups currently being dragged (from previous frame).
+    pub(crate) fn dragged_groups(&self, cx: &Context) -> SmallVec<[GroupId; 4]> {
+        DraggedGroupIds::load(cx, self.id).0
+    }
+
+    /// Set the groups currently being dragged (persisted for next frame's group rendering).
+    pub(crate) fn set_dragged_groups(&self, cx: &Context, groups: SmallVec<[GroupId; 4]>) {
+        DraggedGroupIds(groups).save(cx, self.id);
+    }
 }
 
 impl SnarlWidget {
@@ -706,5 +970,15 @@ impl SnarlWidget {
 #[inline]
 pub fn selected_nodes(id: Id, ctx: &Context) -> Vec<NodeId> {
     ctx.data(|d| d.get_temp::<SelectedNodes>(id).unwrap_or_default().0)
+        .into_vec()
+}
+
+/// Returns groups selected in the UI for the `SnarlWidget` with same ID.
+///
+/// Only works if [`SnarlWidget::id`] was used.
+#[must_use]
+#[inline]
+pub fn selected_groups(id: Id, ctx: &Context) -> Vec<GroupId> {
+    ctx.data(|d| d.get_temp::<SelectedGroups>(id).unwrap_or_default().0)
         .into_vec()
 }

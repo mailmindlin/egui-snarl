@@ -18,12 +18,12 @@
 
 pub mod ui;
 
-use std::ops::{Index, IndexMut};
+use std::{iter::FusedIterator, ops::{Index, IndexMut}};
 
 use egui::{Pos2, ahash::HashSet};
 use slab::Slab;
 
-impl<T> Default for Snarl<T> {
+impl<T, G> Default for Snarl<T, G> {
     fn default() -> Self {
         Snarl::new()
     }
@@ -43,6 +43,19 @@ impl<T> Default for Snarl<T> {
 #[cfg_attr(feature = "facet", derive(facet::Facet))]
 pub struct NodeId(pub usize);
 
+/// Group identifier.
+///
+/// This is newtype wrapper around [`usize`] that implements
+/// necessary traits, but omits arithmetic operations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(transparent)
+)]
+pub struct GroupId(pub usize);
+
 /// Node of the graph.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -57,6 +70,37 @@ pub struct Node<T> {
 
     /// Flag indicating that the node is open - not collapsed.
     pub open: bool,
+
+    /// Group this node belongs to, if any.
+    /// `None` means the node is at the root level.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub group: Option<GroupId>,
+}
+
+/// Group of nodes.
+///
+/// Groups can contain nodes and other groups, forming a hierarchy.
+/// Groups can be collapsed to hide their contents.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct Group<G> {
+    /// Group generic value.
+    pub value: G,
+
+    /// Display title for the group.
+    pub title: String,
+
+    /// Flag indicating that the group is open - not collapsed.
+    pub open: bool,
+
+    /// Parent group, if nested.
+    /// `None` means the group is at the root level.
+    pub parent: Option<GroupId>,
+
+    /// Position of the group when it has no children.
+    /// When the group has children, the position is computed from the bounding box of children.
+    pub pos: egui::Pos2,
 }
 
 /// Output pin identifier.
@@ -208,13 +252,15 @@ impl Wires {
 /// It can be rendered using [`Snarl::show`].
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Snarl<T> {
+pub struct Snarl<T, G = ()> {
     // #[cfg_attr(feature = "serde", serde(with = "serde_nodes"))]
     nodes: Slab<Node<T>>,
     wires: Wires,
+    #[cfg_attr(feature = "serde", serde(default))]
+    groups: Slab<Group<G>>,
 }
 
-impl<T> Snarl<T> {
+impl<T, G> Snarl<T, G> {
     /// Create a new empty Snarl.
     ///
     /// # Examples
@@ -228,6 +274,7 @@ impl<T> Snarl<T> {
         Snarl {
             nodes: Slab::new(),
             wires: Wires::new(),
+            groups: Slab::new(),
         }
     }
 
@@ -246,6 +293,7 @@ impl<T> Snarl<T> {
             value: node,
             pos,
             open: true,
+            group: None,
         });
 
         NodeId(idx)
@@ -266,6 +314,7 @@ impl<T> Snarl<T> {
             value: node,
             pos,
             open: false,
+            group: None,
         });
 
         NodeId(idx)
@@ -399,6 +448,7 @@ impl<T> Snarl<T> {
     }
 
     /// Returns mutable reference to the node data.
+    #[must_use]
     pub fn node_info_mut(&mut self, idx: NodeId) -> Option<&mut Node<T>> {
         self.nodes.get_mut(idx.0)
     }
@@ -538,9 +588,221 @@ impl<T> Snarl<T> {
     pub fn out_pin(&self, pin: OutPinId) -> OutPin {
         OutPin::new(self, pin)
     }
+
+    // --- Group methods ---
+
+    /// Adds a group to the Snarl.
+    /// Returns the identifier of the group.
+    pub fn insert_group(&mut self, pos: egui::Pos2, title: impl Into<String>, value: G) -> GroupId {
+        let idx = self.groups.insert(Group {
+            value,
+            title: title.into(),
+            open: true,
+            parent: None,
+            pos,
+        });
+        GroupId(idx)
+    }
+
+    /// Removes a group from the Snarl.
+    /// All child nodes and subgroups are moved to the parent group (or root).
+    ///
+    /// Returns the group value if the group existed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the group does not exist.
+    #[track_caller]
+    pub fn remove_group(&mut self, id: GroupId) -> G {
+        let group = self.groups.remove(id.0);
+        let parent = group.parent;
+
+        // Move child nodes to parent group
+        for (_, node) in &mut self.nodes {
+            if node.group == Some(id) {
+                node.group = parent;
+            }
+        }
+
+        // Move child groups to parent group
+        for (_, g) in &mut self.groups {
+            if g.parent == Some(id) {
+                g.parent = parent;
+            }
+        }
+
+        group.value
+    }
+
+    /// Returns reference to the group.
+    #[must_use]
+    pub fn group(&self, id: GroupId) -> Option<&G> {
+        self.group_info(id)
+            .map(|info| &info.value)
+    }
+
+    /// Returns mutable reference to the group.
+    #[must_use]
+    pub fn group_mut(&mut self, id: GroupId) -> Option<&mut G> {
+        self.group_info_mut(id)
+            .map(|info| &mut info.value)
+    }
+
+    /// Returns reference to the group data.
+    #[must_use]
+    pub fn group_info(&self, id: GroupId) -> Option<&Group<G>> {
+        self.groups.get(id.0)
+    }
+
+    /// Returns mutable reference to the group data.
+    pub fn group_info_mut(&mut self, id: GroupId) -> Option<&mut Group<G>> {
+        self.groups.get_mut(id.0)
+    }
+
+    /// Sets the group a node belongs to.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the node does not exist.
+    #[track_caller]
+    pub fn set_node_group(&mut self, node: NodeId, group: Option<GroupId>) {
+        self.nodes[node.0].group = group;
+    }
+
+    /// Sets the parent group of a group.
+    /// Validates that this does not create a cycle.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the group does not exist or if the assignment would create a cycle.
+    #[track_caller]
+    pub fn set_group_parent(&mut self, group: GroupId, parent: Option<GroupId>) {
+        if let Some(parent_id) = parent {
+            // Walk the parent chain to check for cycles
+            let mut current = Some(parent_id);
+            while let Some(id) = current {
+                assert!(id != group, "setting this parent would create a cycle");
+                current = self.groups[id.0].parent;
+            }
+        }
+        self.groups[group.0].parent = parent;
+    }
+
+    /// Opens or collapses a group.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the group does not exist.
+    #[track_caller]
+    pub fn open_group(&mut self, id: GroupId, open: bool) {
+        self.groups[id.0].open = open;
+    }
+
+    /// Iterates over direct child nodes of a group.
+    #[must_use]
+    pub fn group_nodes(&self, group: GroupId) -> impl DoubleEndedIterator<Item = NodeId> + '_ {
+        self.nodes
+            .iter()
+            .filter(move |(_, node)| node.group == Some(group))
+            .map(|(idx, _)| NodeId(idx))
+    }
+
+    /// Iterates over direct child groups of a group.
+    #[must_use]
+    pub fn group_subgroups(&self, group: GroupId) -> impl DoubleEndedIterator<Item = GroupId> + '_ {
+        self.groups
+            .iter()
+            .filter(move |(_, g)| g.parent == Some(group))
+            .map(|(idx, _)| GroupId(idx))
+    }
+
+    /// Returns all descendant node IDs of a group (recursive).
+    #[must_use]
+    pub fn group_all_descendants(&self, group: GroupId) -> Vec<NodeId> {
+        let mut result = Vec::new();
+        self.collect_descendants(group, &mut result);
+        result
+    }
+
+    fn collect_descendants(&self, group: GroupId, result: &mut Vec<NodeId>) {
+        for (idx, node) in &self.nodes {
+            if node.group == Some(group) {
+                result.push(NodeId(idx));
+            }
+        }
+        for (idx, g) in &self.groups {
+            if g.parent == Some(group) {
+                self.collect_descendants(GroupId(idx), result);
+            }
+        }
+    }
+
+    /// Iterates over all groups.
+    #[must_use]
+    pub fn groups(&self) -> impl ExactSizeIterator<Item = (GroupId, &Group<G>)> + DoubleEndedIterator + Clone + FusedIterator {
+        self.groups.iter().map(|(idx, g)| (GroupId(idx), g))
+    }
+
+    /// Iterates over all groups mutably.
+    #[must_use]
+    pub fn groups_mut(&mut self) -> impl ExactSizeIterator<Item = (GroupId, &mut Group<G>)> + DoubleEndedIterator + FusedIterator {
+        self.groups.iter_mut().map(|(idx, g)| (GroupId(idx), g))
+    }
+
+    /// Returns true if the group is an ancestor of the given group.
+    #[must_use]
+    pub fn is_ancestor(&self, ancestor: GroupId, descendant: GroupId) -> bool {
+        self.group_ancestor_ids(Some(descendant))
+            .any(|candidate| ancestor == candidate)
+    }
+
+    /// Returns true if the node is inside the given group or any of its descendants.
+    #[must_use]
+    pub fn node_in_group_recursive(&self, node: NodeId, group: GroupId) -> bool {
+        self.group_ancestor_ids(self.node_info(node).and_then(|node| node.group))
+            .any(|ancestor_id| group == ancestor_id)
+    }
+
+    /// Returns true if the given group (or any ancestor) is collapsed.
+    #[must_use]
+    pub fn is_group_collapsed(&self, group: GroupId) -> bool {
+        self.group_ancestors(Some(group))
+            .any(|group| !group.open)
+    }
+
+    /// Iterate over the [`GroupId`]s ancestors of `group`, starting with `group` if present
+    fn group_ancestor_ids(&self, group: Option<GroupId>) -> impl FusedIterator<Item = GroupId> {
+        std::iter::successors(
+            group,
+            |group_id| self.groups.get(group_id.0)?.parent
+        )
+    }
+    fn group_ancestors(&self, group: Option<GroupId>) -> impl Iterator<Item = &Group<G>> {
+        self.group_ancestor_ids(group)
+            .map_while(|group_id| self.group_info(group_id))
+    }
+
+    /// Returns true if the node is hidden because its group (or an ancestor group) is collapsed.
+    #[must_use]
+    pub fn is_node_hidden(&self, node: NodeId) -> bool {
+        self.node_info(node)
+            .and_then(|n| n.group)
+            .is_some_and(|group| self.is_group_collapsed(group))
+    }
+
+    /// Returns the outermost collapsed group that hides this node, if any.
+    /// This is the group whose visual rect should be used as a wire endpoint.
+    #[must_use]
+    pub(crate) fn node_collapsed_group(&self, node: NodeId) -> Option<GroupId> {
+        let group = self.node_info(node)?.group?;
+        // Walk up the ancestor chain, tracking the outermost collapsed group
+        self.group_ancestor_ids(Some(group))
+            .filter(|group_id| self.group_info(*group_id).is_some_and(|group| !group.open))
+            .last()
+    }
 }
 
-impl<T> Index<NodeId> for Snarl<T> {
+impl<T, G> Index<NodeId> for Snarl<T, G> {
     type Output = T;
 
     #[inline]
@@ -550,11 +812,29 @@ impl<T> Index<NodeId> for Snarl<T> {
     }
 }
 
-impl<T> IndexMut<NodeId> for Snarl<T> {
+impl<T, G> IndexMut<NodeId> for Snarl<T, G> {
     #[inline]
     #[track_caller]
     fn index_mut(&mut self, idx: NodeId) -> &mut Self::Output {
         &mut self.nodes[idx.0].value
+    }
+}
+
+impl<T, G> Index<GroupId> for Snarl<T, G> {
+    type Output = G;
+
+    #[inline]
+    #[track_caller]
+    fn index(&self, idx: GroupId) -> &Self::Output {
+        &self.groups[idx.0].value
+    }
+}
+
+impl<T, G> IndexMut<GroupId> for Snarl<T, G> {
+    #[inline]
+    #[track_caller]
+    fn index_mut(&mut self, idx: GroupId) -> &mut Self::Output {
+        &mut self.groups[idx.0].value
     }
 }
 
@@ -867,7 +1147,7 @@ pub struct InPin {
 }
 
 impl OutPin {
-    fn new<T>(snarl: &Snarl<T>, pin: OutPinId) -> Self {
+    fn new<T, G>(snarl: &Snarl<T, G>, pin: OutPinId) -> Self {
         OutPin {
             id: pin,
             remotes: snarl.wires.wired_inputs(pin).collect(),
@@ -876,7 +1156,7 @@ impl OutPin {
 }
 
 impl InPin {
-    fn new<T>(snarl: &Snarl<T>, pin: InPinId) -> Self {
+    fn new<T, G>(snarl: &Snarl<T, G>, pin: InPinId) -> Self {
         InPin {
             id: pin,
             remotes: snarl.wires.wired_outputs(pin).collect(),

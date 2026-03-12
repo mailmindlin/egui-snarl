@@ -17,7 +17,7 @@ use egui::{
 use egui_scale::EguiScale;
 use smallvec::SmallVec;
 
-use crate::{InPin, InPinId, Node, NodeId, OutPin, OutPinId, Snarl, ui::wire::WireId};
+use crate::{GroupId, InPin, InPinId, Node, NodeId, OutPin, OutPinId, Snarl, ui::wire::WireId};
 
 mod background_pattern;
 mod config;
@@ -29,15 +29,15 @@ mod wire;
 
 use self::{
     pin::AnyPin,
-    state::{NewWires, NodeState, RowHeights, SnarlState},
-    wire::{draw_wire, hit_wire, pick_wire_style},
+    state::{GroupState, NewWires, NodeState, RowHeights, SnarlState},
+    wire::{WireResponse, draw_wire},
 };
 
 pub use self::{
     background_pattern::{BackgroundPattern, Grid},
     config::{ModifierClick, SnapGrid, SnapGridType, SnarlConfig},
     pin::{AnyPins, PinContext, PinInfo, PinShape, PinWireInfo, SnarlPin},
-    state::selected_nodes,
+    state::{selected_groups, selected_nodes},
     viewer::SnarlViewer,
     wire::{WireLayer, WireStyle, WireWidgetContext, WireWidgetDescriptor, point_on_wire},
 };
@@ -864,6 +864,13 @@ impl SnarlStyle {
     fn vertical_wires(&self) -> bool {
         self.vertical_wires.unwrap_or(true)
     }
+    fn vertical_wire(&self, from_pos: Pos2, to_pos: Pos2) -> bool {
+        self.vertical_wires() && {
+            let dx = (to_pos.x - from_pos.x).abs();
+            let dy = (to_pos.y - from_pos.y).abs();
+            dy > dx
+        }
+    }
 
     fn wire_layer(&self) -> WireLayer {
         self.wire_layer.unwrap_or(WireLayer::BehindNodes)
@@ -1093,6 +1100,7 @@ struct DrawBodyResponse {
     final_rect: Rect,
 }
 
+#[derive(Debug)]
 struct PinResponse {
     pos: Pos2,
     wire_color: Color32,
@@ -1196,9 +1204,9 @@ impl SnarlWidget {
 
     /// Render [`Snarl`] using given viewer and style into the [`Ui`].
     #[inline]
-    pub fn show<T, V>(&self, snarl: &mut Snarl<T>, viewer: &mut V, ui: &mut Ui) -> egui::Response
+    pub fn show<T, G, V>(&self, snarl: &mut Snarl<T, G>, viewer: &mut V, ui: &mut Ui) -> egui::Response
     where
-        V: SnarlViewer<T>,
+        V: SnarlViewer<T, G>,
     {
         let snarl_id = self.get_id(ui.id());
 
@@ -1217,18 +1225,18 @@ impl SnarlWidget {
 
 #[inline(never)]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn show_snarl<T, V>(
+fn show_snarl<T, G, V>(
     snarl_id: Id,
     mut style: SnarlStyle,
     mut config: SnarlConfig,
     min_size: Vec2,
     max_size: Vec2,
-    snarl: &mut Snarl<T>,
+    snarl: &mut Snarl<T, G>,
     viewer: &mut V,
     ui: &mut Ui,
 ) -> egui::Response
 where
-    V: SnarlViewer<T>,
+    V: SnarlViewer<T, G>,
 {
     let (mut latest_pos, input) = ui.ctx().input(|i| {
         (
@@ -1260,10 +1268,12 @@ where
     content_rect.max.y = content_rect.max.y.max(content_rect.min.y);
 
     let snarl_layer_id = LayerId::new(ui.layer_id().order, snarl_id);
+    let group_layer_id = LayerId::new(ui.layer_id().order, snarl_id.with("groups"));
     let wire_layer_id = LayerId::new(ui.layer_id().order, snarl_id.with("wires"));
     let node_layer_id = LayerId::new(ui.layer_id().order, snarl_id.with("nodes"));
 
     ui.ctx().set_sublayer(ui.layer_id(), snarl_layer_id);
+    ui.ctx().set_sublayer(snarl_layer_id, group_layer_id);
     match style.wire_layer() {
         WireLayer::BehindNodes => {
             ui.ctx().set_sublayer(snarl_layer_id, wire_layer_id);
@@ -1346,6 +1356,7 @@ where
 
     // Set transform for snarl layer and sublayers.
     ui.ctx().set_transform_layer(snarl_layer_id, to_global);
+    ui.ctx().set_transform_layer(group_layer_id, to_global);
     ui.ctx().set_transform_layer(wire_layer_id, to_global);
     ui.ctx().set_transform_layer(node_layer_id, to_global);
 
@@ -1365,6 +1376,9 @@ where
     if let Some(ref grid) = config.grid_snap {
         grid.draw(&viewport, ui.painter());
     }
+
+    // --- Draw groups ---
+    let dragged_nodes = draw_groups(snarl_id, snarl, viewer, &input, group_layer_id, &mut snarl_state, &mut ui);
 
     let mut node_moved = None;
     let mut node_to_top = None;
@@ -1421,7 +1435,10 @@ where
             continue;
         }
 
-        // show_node(node_idx);
+        // Skip nodes hidden by collapsed groups
+        if snarl.is_node_hidden(node_idx) {
+            continue;
+        }
         let response = draw_node(
             snarl,
             &mut node_ui,
@@ -1461,134 +1478,31 @@ where
         }
     }
 
-    let mut hovered_wire = None;
-    let mut hovered_wire_disconnect = false;
-    let mut wire_shapes = Vec::new();
-    let mut wire_widgets = Vec::new();
-
+    let mut wire_resp = WireResponse::default();
+    let wire_info = wire::WireInfo {
+        output_pins,
+        output_info,
+        input_pins,
+        input_info,
+        wire_frame_size,
+        wire_width,
+        latest_pos,
+        wire_threshold,
+    };
     // Draw and interact with wires
     for wire in snarl.wires.iter() {
-        let Some(from_r) = output_info.get(&wire.out_pin) else {
-            continue;
-        };
-        let Some(to_r) = input_info.get(&wire.in_pin) else {
-            continue;
-        };
-        let Some(out_pin) = output_pins.get(&wire.out_pin) else {
-            continue;
-        };
-        let Some(in_pin) = input_pins.get(&wire.in_pin) else {
-            continue;
-        };
-
-        if !snarl_state.has_new_wires() && snarl_resp.contains_pointer() && hovered_wire.is_none() {
-            // Try to find hovered wire
-            // If not dragging new wire
-            // And not hovering over item above.
-
-            if let Some(latest_pos) = latest_pos {
-                // Use vertical wire drawing when Y distance > X distance (Houdini-style)
-                let vertical_wire = style.vertical_wires() && {
-                    let dx = (to_r.pos.x - from_r.pos.x).abs();
-                    let dy = (to_r.pos.y - from_r.pos.y).abs();
-                    dy > dx
-                };
-
-                let wire_hit = hit_wire(
-                    ui.ctx(),
-                    WireId::Connected {
-                        snarl_id,
-                        out_pin: wire.out_pin,
-                        in_pin: wire.in_pin,
-                    },
-                    wire_frame_size,
-                    style.upscale_wire_frame(),
-                    style.downscale_wire_frame(),
-                    from_r.pos,
-                    to_r.pos,
-                    latest_pos,
-                    wire_width.max(2.0),
-                    pick_wire_style(from_r.wire_style, to_r.wire_style),
-                    vertical_wire,
-                );
-
-                if wire_hit {
-                    hovered_wire = Some(wire);
-
-                    let wire_r =
-                        ui.interact(snarl_resp.rect, ui.make_persistent_id(wire), Sense::click());
-
-                    let suppress = viewer.wire_interact(
-                        &wire.out_pin,
-                        &wire.in_pin,
-                        &wire_r,
-                        snarl,
-                    );
-
-                    //Remove hovered wire by second click
-                    if !suppress {
-                        hovered_wire_disconnect |=
-                            wire_r.clicked_by(config.remove_hovered_wire.mouse_button);
-                    }
-                }
-            }
-        }
-
-        let color = mix_colors(from_r.wire_color, to_r.wire_color);
-
-        let mut draw_width = wire_width;
-        if hovered_wire == Some(wire) {
-            draw_width *= 1.5;
-        }
-
-        // Use vertical wire drawing when Y distance > X distance (Houdini-style)
-        let vertical_wire = style.vertical_wires() && {
-            let dx = (to_r.pos.x - from_r.pos.x).abs();
-            let dy = (to_r.pos.y - from_r.pos.y).abs();
-            dy > dx
-        };
-
-        draw_wire(
-            &ui,
-            WireId::Connected {
-                snarl_id,
-                out_pin: wire.out_pin,
-                in_pin: wire.in_pin,
-            },
-            &mut wire_shapes,
-            wire_frame_size,
-            style.upscale_wire_frame(),
-            style.downscale_wire_frame(),
-            from_r.pos,
-            to_r.pos,
-            Stroke::new(draw_width, color),
-            wire_threshold,
-            pick_wire_style(from_r.wire_style, to_r.wire_style),
-            vertical_wire,
-        );
-        let descriptors = viewer.wire_widgets(&wire.out_pin, &wire.in_pin, snarl);
-        if !descriptors.is_empty() {
-            wire_widgets.push(WireWidgetInfo {
-                out_pin,
-                in_pin,
-                from_pos: from_r.pos,
-                to_pos: to_r.pos,
-                wire_style: pick_wire_style(from_r.wire_style, to_r.wire_style),
-                vertical: vertical_wire,
-                descriptors,
-            });
-        }
+        let _ = wire::show_wire(wire, &snarl, viewer, &mut ui, snarl_id, &snarl_state, &style, &config, &snarl_resp, &wire_info, &mut wire_resp);
     }
 
     // Remove hovered wire by second click
-    if hovered_wire_disconnect && let Some(wire) = hovered_wire {
+    if wire_resp.hovered_wire_disconnect && let Some(wire) = wire_resp.hovered_wire {
         let out_pin = OutPin::new(snarl, wire.out_pin);
         let in_pin = InPin::new(snarl, wire.in_pin);
         viewer.disconnect(&out_pin, &in_pin, snarl);
     }
 
     // Remove hovered wire by second click
-    if hovered_wire_disconnect && let Some(wire) = hovered_wire {
+    if wire_resp.hovered_wire_disconnect && let Some(wire) = wire_resp.hovered_wire {
         let out_pin = OutPin::new(snarl, wire.out_pin);
         let in_pin = InPin::new(snarl, wire.in_pin);
         viewer.disconnect(&out_pin, &in_pin, snarl);
@@ -1718,8 +1632,9 @@ where
         let _ = snarl_state.take_new_wires();
     }
 
-    if input.modifiers.command || input.escape_pressed {
+    if input.escape_pressed {
         snarl_state.deselect_all_nodes();
+        snarl_state.deselect_all_groups();
     }
 
     if let Some(interact_pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
@@ -1764,19 +1679,13 @@ where
         Some(NewWires::In(in_pins)) => {
             for &in_pin in in_pins {
                 let from_pos = wire_end_pos;
-                let to_r = &input_info[&in_pin];
+                let to_r = &wire_info.input_info[&in_pin];
 
                 // Use vertical wire drawing when Y distance > X distance
-                let vertical_wire = style.vertical_wires() && {
-                    let dx = (to_r.pos.x - from_pos.x).abs();
-                    let dy = (to_r.pos.y - from_pos.y).abs();
-                    dy > dx
-                };
-
                 draw_wire(
                     &ui,
                     WireId::NewInput { snarl_id, in_pin },
-                    &mut wire_shapes,
+                    &mut wire_resp.wire_shapes,
                     wire_frame_size,
                     style.upscale_wire_frame(),
                     style.downscale_wire_frame(),
@@ -1785,26 +1694,22 @@ where
                     Stroke::new(wire_width, to_r.wire_color),
                     wire_threshold,
                     to_r.wire_style,
-                    vertical_wire,
+                    style.vertical_wire(from_pos, to_r.pos),
                 );
             }
         }
         Some(NewWires::Out(out_pins)) => {
             for &out_pin in out_pins {
-                let from_r = &output_info[&out_pin];
+                let from_r = &wire_info.output_info[&out_pin];
                 let to_pos = wire_end_pos;
 
                 // Use vertical wire drawing when Y distance > X distance
-                let vertical_wire = style.vertical_wires() && {
-                    let dx = (to_pos.x - from_r.pos.x).abs();
-                    let dy = (to_pos.y - from_r.pos.y).abs();
-                    dy > dx
-                };
+                let vertical_wire = style.vertical_wire(from_r.pos, to_pos);
 
                 draw_wire(
                     &ui,
                     WireId::NewOutput { snarl_id, out_pin },
-                    &mut wire_shapes,
+                    &mut wire_resp.wire_shapes,
                     wire_frame_size,
                     style.upscale_wire_frame(),
                     style.downscale_wire_frame(),
@@ -1820,11 +1725,11 @@ where
     }
 
     let wire_painter = ui.painter().clone().with_layer_id(wire_layer_id);
-    for shape in wire_shapes {
+    for shape in wire_resp.wire_shapes {
         wire_painter.add(shape);
     }
 
-    for info in wire_widgets {
+    for info in wire_resp.wire_widgets {
         let wire_x_length = (info.from_pos.x - info.to_pos.x).abs();
 
         for (index, descriptor) in info.descriptors.into_iter().enumerate() {
@@ -1930,6 +1835,85 @@ where
         }
     }
 
+    // Update dragged nodes for next frame's group rendering.
+    // When nodes are being dragged, they're excluded from group bounding rect computation
+    // so they can be visually dragged out of a group.
+    if let Some((node, _)) = node_moved {
+        let nodes = if drag_released {
+            // Drag ended — clear dragged nodes
+            SmallVec::new()
+        } else {
+            let nodes: SmallVec<[NodeId; 4]> = if snarl_state.selected_nodes().contains(&node) {
+                snarl_state.selected_nodes().iter().copied().collect()
+            } else {
+                smallvec::smallvec![node]
+            };
+            nodes
+        };
+        snarl_state.set_dragged_nodes(ui.ctx(), nodes);
+    } else if !drag_released {
+        // No node moved and no drag released — check if we should clear stale dragged state.
+        // If dragged_nodes is non-empty but nothing is being dragged, clear it.
+        if !dragged_nodes.is_empty() {
+            snarl_state.set_dragged_nodes(ui.ctx(), SmallVec::new());
+        }
+    }
+
+    // Detect group membership changes after node drag
+    if drag_released {
+        let nodes_to_check: &[NodeId] = if let Some((node, _)) = node_moved {
+            if snarl_state.selected_nodes().contains(&node) {
+                snarl_state.selected_nodes()
+            } else {
+                &[node]
+            }
+        } else {
+            &[]
+        };
+
+        for &node_id in nodes_to_check {
+            if !snarl.nodes.contains(node_id.0) {
+                continue;
+            }
+
+            let node_pos = snarl.nodes[node_id.0].pos;
+            let old_group = snarl.nodes[node_id.0].group;
+
+            // Find the deepest group whose cached rect contains this node's position
+            let mut best_group: Option<(crate::GroupId, u32)> = None;
+            for (gid, group) in snarl.groups() {
+                if !group.open {
+                    continue;
+                }
+                let gs = GroupState::load(ui.ctx(), snarl_id, gid);
+                if gs.rect().is_finite() && gs.rect().contains(node_pos) {
+                    let mut depth = 0u32;
+                    let mut current = group.parent;
+                    while let Some(pid) = current {
+                        depth += 1;
+                        current = snarl.group_info(pid).and_then(|g| g.parent);
+                    }
+                    if best_group.is_none_or(|(_, d)| depth > d) {
+                        best_group = Some((gid, depth));
+                    }
+                }
+                gs.store(ui.ctx());
+            }
+
+            let new_group = best_group.map(|(gid, _)| gid);
+
+            if new_group != old_group {
+                let accepted = new_group.is_none_or(|gid| {
+                    viewer.accept_node_in_group(node_id, gid, snarl)
+                });
+                if accepted {
+                    snarl.set_node_group(node_id, new_group);
+                    viewer.node_group_changed(node_id, old_group, new_group, snarl);
+                }
+            }
+        }
+    }
+
     // Draw foreground elements (comments, annotations, overlays)
     viewer.draw_foreground(&viewport, &style, ui.style(), ui.painter(), snarl);
 
@@ -1938,10 +1922,302 @@ where
     snarl_resp
 }
 
+#[allow(clippy::too_many_lines)]
+fn draw_groups<T, G, V>(
+    snarl_id: Id,
+    snarl: &mut Snarl<T, G>,
+    viewer: &mut V,
+    input: &Input,
+    group_layer_id: LayerId,
+    snarl_state: &mut SnarlState,
+    ui: &mut Ui
+) -> SmallVec<[NodeId; 4]>
+where
+    V: SnarlViewer<T, G>
+{
+    let group_draw_order = snarl_state.update_group_draw_order(snarl);
+    let dragged_nodes = snarl_state.dragged_nodes(ui.ctx());
+    let dragged_groups = snarl_state.dragged_groups(ui.ctx());
+    let mut group_dragged: Option<GroupId> = None;
+    let mut group_drag_released = false;
+
+    {
+        let mut group_ui = ui.new_child(
+            UiBuilder::new()
+                .layer_id(group_layer_id)
+                .max_rect(ui.max_rect()),
+        );
+        group_ui.set_clip_rect(ui.clip_rect());
+
+        let group_painter = group_ui.painter().clone().with_layer_id(group_layer_id);
+        let group_padding = 20.0;
+        let group_header_height = 24.0;
+
+        for group_id in group_draw_order {
+            let Some(group) = snarl.group_info(group_id) else {
+                continue;
+            };
+
+            if !group.open {
+                // Draw collapsed group
+                let group_state = GroupState::load(group_ui.ctx(), snarl_id, group_id);
+                let collapsed_pos = group_state.collapsed_pos()
+                    .unwrap_or_else(|| {
+                        if group_state.rect().is_finite() {
+                            group_state.rect().min
+                        } else {
+                            group.pos
+                        }
+                    });
+                let collapsed_size = egui::vec2(150.0, group_header_height + 8.0);
+                let collapsed_rect = Rect::from_min_size(collapsed_pos, collapsed_size);
+
+                let title = viewer.group_title(group_id, snarl);
+                let default_frame = egui::Frame::group(group_ui.style())
+                    .fill(group_ui.style().visuals.faint_bg_color)
+                    .corner_radius(4.0);
+                let frame = viewer.group_frame(default_frame, group_id, snarl);
+
+                let resp = group_ui.interact(collapsed_rect, snarl_id.with(("group_interact", group_id.0)), Sense::click_and_drag());
+
+                group_painter.add(frame.paint(collapsed_rect));
+
+                group_painter.text(
+                    collapsed_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("▶ {title}"),
+                    egui::FontId::proportional(14.0),
+                    group_ui.style().visuals.text_color(),
+                );
+
+                // Handle double-click to expand
+                if resp.double_clicked() {
+                    snarl.open_group(group_id, true);
+                }
+
+                // Handle drag
+                if resp.dragged_by(PointerButton::Primary) {
+                    let delta = resp.drag_delta();
+                    // Move collapsed position
+                    let mut gs = GroupState::load(group_ui.ctx(), snarl_id, group_id);
+                    gs.set_collapsed_pos(collapsed_pos + delta);
+                    // Move the group's own pos
+                    snarl.groups[group_id.0].pos += delta;
+                    // Also move all descendant nodes so they stay in place when expanded
+                    let descendants = snarl.group_all_descendants(group_id);
+                    for node_id in descendants {
+                        snarl.nodes[node_id.0].pos += delta;
+                    }
+                    gs.store(group_ui.ctx());
+                    group_dragged = Some(group_id);
+                }
+
+                if resp.drag_stopped_by(PointerButton::Primary) {
+                    group_drag_released = true;
+                    if group_dragged.is_none() {
+                        group_dragged = Some(group_id);
+                    }
+                }
+
+                group_state.store(group_ui.ctx());
+                continue;
+            }
+
+            // Compute bounding rect from child nodes
+            let mut group_rect = Rect::NOTHING;
+
+            for (idx, node) in &snarl.nodes {
+                if node.group == Some(group_id) && !dragged_nodes.contains(&NodeId(idx)) {
+                    let node_state = NodeState::load(group_ui.ctx(), snarl_id, NodeId(idx), group_ui.spacing());
+                    let node_rect = node_state.node_rect(node.pos, if node.open { 1.0 } else { 0.0 });
+                    group_rect = group_rect.union(node_rect);
+                    node_state.store(group_ui.ctx());
+                }
+            }
+
+            // Include child group rects (excluding dragged groups)
+            for (idx, child_group) in &snarl.groups {
+                let idx = GroupId(idx);
+                if child_group.parent == Some(group_id) && !dragged_groups.contains(&idx) {
+                    let child_state = GroupState::load(group_ui.ctx(), snarl_id, idx);
+                    if child_state.rect().is_finite() {
+                        group_rect = group_rect.union(child_state.rect());
+                    }
+                    child_state.store(group_ui.ctx());
+                }
+            }
+
+            if group_rect.is_finite() {
+                // Expand rect for padding and header
+                group_rect = group_rect.expand(group_padding);
+                // Update stored pos to track the computed rect origin
+                snarl.groups[group_id.0].pos = group_rect.min;
+            } else {
+                // Empty group: use stored position with a default size
+                let default_size = egui::vec2(150.0, 60.0);
+                group_rect = Rect::from_min_size(group.pos, default_size);
+            }
+            group_rect.min.y -= group_header_height;
+
+            // Cache the computed rect
+            let mut group_state = GroupState::load(group_ui.ctx(), snarl_id, group_id);
+            group_state.set_rect(group_rect);
+
+            // Draw group background
+            let title = viewer.group_title(group_id, snarl);
+            let default_frame = egui::Frame::group(group_ui.style())
+                .fill(group_ui.style().visuals.faint_bg_color.linear_multiply(0.5))
+                .corner_radius(8.0);
+            let frame = viewer.group_frame(default_frame, group_id, snarl);
+
+            group_painter.add(frame.paint(group_rect));
+
+            // Draw header with title
+            let header_rect = Rect::from_min_size(
+                group_rect.min,
+                egui::vec2(group_rect.width(), group_header_height),
+            );
+            group_painter.text(
+                header_rect.left_center() + egui::vec2(8.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                format!("▼ {title}"),
+                egui::FontId::proportional(14.0),
+                group_ui.style().visuals.text_color(),
+            );
+
+            // Handle interaction
+            let resp = group_ui.interact(header_rect, snarl_id.with(("group_header", group_id.0)), Sense::click_and_drag());
+
+            // Double-click to collapse
+            if resp.double_clicked() {
+                // Save current rect center as collapsed position
+                group_state.set_collapsed_pos(group_rect.center_top());
+                snarl.open_group(group_id, false);
+            }
+
+            // Drag group header to move all children
+            if resp.dragged_by(PointerButton::Primary) {
+                let delta = resp.drag_delta();
+                // Move the group's own pos
+                snarl.groups[group_id.0].pos += delta;
+                // Move all descendant nodes
+                let descendants = snarl.group_all_descendants(group_id);
+                for node_id in descendants {
+                    snarl.nodes[node_id.0].pos += delta;
+                }
+                // Also move child groups' positions and collapsed positions
+                for (idx, child_group) in &snarl.groups {
+                    if child_group.parent == Some(group_id) {
+                        let mut cs = GroupState::load(group_ui.ctx(), snarl_id, GroupId(idx));
+                        if let Some(pos) = cs.collapsed_pos() {
+                            cs.set_collapsed_pos(pos + delta);
+                        }
+                        cs.store(group_ui.ctx());
+                    }
+                }
+                group_dragged = Some(group_id);
+            }
+
+            if resp.drag_stopped_by(PointerButton::Primary) {
+                group_drag_released = true;
+                if group_dragged.is_none() {
+                    group_dragged = Some(group_id);
+                }
+            }
+
+            // Selection highlight
+            if snarl_state.selected_groups().contains(&group_id) {
+                let highlight_rect = group_rect.expand(2.0);
+                group_painter.rect_stroke(
+                    highlight_rect,
+                    8.0,
+                    egui::Stroke::new(2.0, group_ui.style().visuals.selection.stroke.color),
+                    StrokeKind::Outside,
+                );
+            }
+
+            // Click to select group
+            if resp.clicked() {
+                if input.modifiers.shift {
+                    if snarl_state.selected_groups().contains(&group_id) {
+                        snarl_state.deselect_group(group_id);
+                    } else {
+                        snarl_state.select_group(group_id);
+                    }
+                } else {
+                    snarl_state.deselect_all_groups();
+                    snarl_state.select_group(group_id);
+                }
+            }
+
+            // Context menu
+            if resp.secondary_clicked() && viewer.has_group_menu(group_id, snarl) {
+                resp.context_menu(|ui| {
+                    viewer.show_group_menu(group_id, ui, snarl);
+                });
+            }
+
+            group_state.store(group_ui.ctx());
+        }
+    }
+
+    // Update dragged groups for next frame's parent group rendering.
+    if let Some(gid) = group_dragged {
+        let groups = if group_drag_released {
+            SmallVec::new()
+        } else {
+            smallvec::smallvec![gid]
+        };
+        snarl_state.set_dragged_groups(ui.ctx(), groups);
+    } else if !dragged_groups.is_empty() {
+        snarl_state.set_dragged_groups(ui.ctx(), SmallVec::new());
+    }
+
+    // Detect group parent changes after group drag release
+    if group_drag_released && let Some(dragged_gid) = group_dragged {
+        let group_pos = snarl.groups[dragged_gid.0].pos;
+        let old_parent = snarl.groups[dragged_gid.0].parent;
+
+        // Find the deepest group whose cached rect contains this group's position,
+        // excluding the dragged group itself and its descendants.
+        let mut descendant_groups = Vec::new();
+        collect_descendant_groups(snarl, dragged_gid, &mut descendant_groups);
+
+        let mut best_parent: Option<(crate::GroupId, u32)> = None;
+        for (gid, group) in snarl.groups() {
+            if gid == dragged_gid || descendant_groups.contains(&gid) {
+                continue;
+            }
+            if !group.open {
+                continue;
+            }
+            let gs = GroupState::load(ui.ctx(), snarl_id, gid);
+            if gs.rect().is_finite() && gs.rect().contains(group_pos) {
+                let mut depth = 0u32;
+                let mut current = group.parent;
+                while let Some(pid) = current {
+                    depth += 1;
+                    current = snarl.group_info(pid).and_then(|g| g.parent);
+                }
+                if best_parent.is_none_or(|(_, d)| depth > d) {
+                    best_parent = Some((gid, depth));
+                }
+            }
+            gs.store(ui.ctx());
+        }
+
+        let new_parent = best_parent.map(|(gid, _)| gid);
+        if new_parent != old_parent {
+            snarl.set_group_parent(dragged_gid, new_parent);
+        }
+    }
+    dragged_nodes
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-fn draw_inputs<T, V>(
-    snarl: &mut Snarl<T>,
+fn draw_inputs<T, G, V>(
+    snarl: &mut Snarl<T, G>,
     viewer: &mut V,
     node: NodeId,
     inputs: &[InPin],
@@ -1961,7 +2237,7 @@ fn draw_inputs<T, V>(
     heights: Heights,
 ) -> DrawPinsResponse
 where
-    V: SnarlViewer<T>,
+    V: SnarlViewer<T, G>,
 {
     let mut drag_released = false;
     let mut pin_hovered = None;
@@ -2119,8 +2395,8 @@ where
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-fn draw_outputs<T, V>(
-    snarl: &mut Snarl<T>,
+fn draw_outputs<T, G, V>(
+    snarl: &mut Snarl<T, G>,
     viewer: &mut V,
     node: NodeId,
     outputs: &[OutPin],
@@ -2140,7 +2416,7 @@ fn draw_outputs<T, V>(
     heights: Heights,
 ) -> DrawPinsResponse
 where
-    V: SnarlViewer<T>,
+    V: SnarlViewer<T, G>,
 {
     let mut drag_released = false;
     let mut pin_hovered = None;
@@ -2298,8 +2574,8 @@ where
 /// Pins are arranged left-to-right with pin icons at the edge and labels below/above.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-fn draw_inputs_horizontal<T, V>(
-    snarl: &mut Snarl<T>,
+fn draw_inputs_horizontal<T, G, V>(
+    snarl: &mut Snarl<T, G>,
     viewer: &mut V,
     node: NodeId,
     inputs: &[InPin],
@@ -2319,7 +2595,7 @@ fn draw_inputs_horizontal<T, V>(
     pins_at_top: bool,
 ) -> DrawPinsHorizontalResponse
 where
-    V: SnarlViewer<T>,
+    V: SnarlViewer<T, G>,
 {
     let mut drag_released = false;
     let mut pin_hovered = None;
@@ -2468,8 +2744,8 @@ where
 /// Pins are arranged left-to-right with pin icons at the edge and labels below/above.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
-fn draw_outputs_horizontal<T, V>(
-    snarl: &mut Snarl<T>,
+fn draw_outputs_horizontal<T, G, V>(
+    snarl: &mut Snarl<T, G>,
     viewer: &mut V,
     node: NodeId,
     outputs: &[OutPin],
@@ -2489,7 +2765,7 @@ fn draw_outputs_horizontal<T, V>(
     pins_at_top: bool,
 ) -> DrawPinsHorizontalResponse
 where
-    V: SnarlViewer<T>,
+    V: SnarlViewer<T, G>,
 {
     let mut drag_released = false;
     let mut pin_hovered = None;
@@ -2632,8 +2908,8 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_body<T, V>(
-    snarl: &mut Snarl<T>,
+fn draw_body<T, G, V>(
+    snarl: &mut Snarl<T, G>,
     viewer: &mut V,
     node: NodeId,
     inputs: &[InPin],
@@ -2644,7 +2920,7 @@ fn draw_body<T, V>(
     _snarl_state: &SnarlState,
 ) -> DrawBodyResponse
 where
-    V: SnarlViewer<T>,
+    V: SnarlViewer<T, G>,
 {
     let mut body_ui = ui.new_child(
         UiBuilder::new()
@@ -2669,8 +2945,8 @@ where
 #[inline]
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
-fn draw_node<T, V>(
-    snarl: &mut Snarl<T>,
+fn draw_node<T, G, V>(
+    snarl: &mut Snarl<T, G>,
     ui: &mut Ui,
     node: NodeId,
     viewer: &mut V,
@@ -2683,12 +2959,13 @@ fn draw_node<T, V>(
     output_positions: &mut HashMap<OutPinId, PinResponse>,
 ) -> Option<DrawNodeResponse>
 where
-    V: SnarlViewer<T>,
+    V: SnarlViewer<T, G>,
 {
     let Node {
         pos,
         open,
         ref value,
+        ..
     } = snarl.nodes[node.0];
 
     // Collect pins
@@ -2767,6 +3044,14 @@ where
         && r.dragged_by(config.click_node.mouse_button)
     {
         node_moved = Some((node, r.drag_delta()));
+    }
+
+    if r.drag_stopped_by(config.click_node.mouse_button) {
+        drag_released = true;
+        // Ensure node_moved is set on the release frame so group membership detection works
+        if node_moved.is_none() {
+            node_moved = Some((node, Vec2::ZERO));
+        }
     }
 
     if r.clicked_by(config.click_node.mouse_button) || r.dragged_by(config.drag_node.mouse_button) {
@@ -3711,7 +3996,7 @@ const fn mix_colors(a: Color32, b: Color32) -> Color32 {
 //     })
 // }
 
-impl<T> Snarl<T> {
+impl<T, G> Snarl<T, G> {
     /// Render [`Snarl`] using given viewer and style into the [`Ui`].
     #[inline]
     pub fn show<V>(
@@ -3722,7 +4007,7 @@ impl<T> Snarl<T> {
         id_salt: impl Hash,
         ui: &mut Ui,
     ) where
-        V: SnarlViewer<T>,
+        V: SnarlViewer<T, G>,
     {
         show_snarl(
             ui.make_persistent_id(id_salt),
@@ -3735,6 +4020,40 @@ impl<T> Snarl<T> {
             ui,
         );
     }
+}
+
+/// Collects all descendant group IDs of a group (recursive).
+fn collect_descendant_groups<T, G>(snarl: &Snarl<T, G>, group: crate::GroupId, result: &mut Vec<crate::GroupId>) {
+    for (idx, g) in &snarl.groups {
+        if g.parent == Some(group) {
+            let child_id = crate::GroupId(idx);
+            result.push(child_id);
+            collect_descendant_groups(snarl, child_id, result);
+        }
+    }
+}
+
+/// Find the nearest point on the edge of `rect` to the external point `target`.
+/// Used to route wires to the edge of collapsed groups.
+fn nearest_rect_edge(rect: Rect, target: Pos2) -> Pos2 {
+    let center = rect.center();
+    let dx = target.x - center.x;
+    let dy = target.y - center.y;
+
+    if dx == 0.0 && dy == 0.0 {
+        // Target is at the center — pick the right edge arbitrarily
+        return pos2(rect.max.x, center.y);
+    }
+
+    let half_w = rect.width() * 0.5;
+    let half_h = rect.height() * 0.5;
+
+    // Scale factor to reach rect edge along the direction from center to target
+    let scale_x = if dx != 0.0 { half_w / dx.abs() } else { f32::INFINITY };
+    let scale_y = if dy != 0.0 { half_h / dy.abs() } else { f32::INFINITY };
+    let scale = scale_x.min(scale_y);
+
+    pos2(center.x + dx * scale, center.y + dy * scale)
 }
 
 #[inline]

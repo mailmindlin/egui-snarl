@@ -1,6 +1,6 @@
 use egui::{Painter, Pos2, Rect, Response, Style, Ui, emath::TSTransform};
 
-use crate::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
+use crate::{GroupId, InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 
 use super::{
     BackgroundPattern, NodeLayout, SnarlStyle,
@@ -12,7 +12,7 @@ use super::{
 ///
 /// It can extract necessary data from the nodes and controls their
 /// response to certain events.
-pub trait SnarlViewer<T> {
+pub trait SnarlViewer<T, G = ()> {
     /// Returns title of the node.
     fn title(&mut self, node: &T) -> String;
 
@@ -30,7 +30,7 @@ pub trait SnarlViewer<T> {
         node: NodeId,
         inputs: &[InPin],
         outputs: &[OutPin],
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
     ) -> egui::Frame {
         let _ = (node, inputs, outputs, snarl);
         default
@@ -51,7 +51,7 @@ pub trait SnarlViewer<T> {
         node: NodeId,
         inputs: &[InPin],
         outputs: &[OutPin],
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
     ) -> egui::Frame {
         let _ = (node, inputs, outputs, snarl);
         default
@@ -63,7 +63,7 @@ pub trait SnarlViewer<T> {
         node: NodeId,
         inputs: &[InPin],
         outputs: &[OutPin],
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
     ) -> bool {
         let _ = (node, inputs, outputs, snarl);
         false
@@ -76,7 +76,7 @@ pub trait SnarlViewer<T> {
         node: NodeId,
         inputs: &[InPin],
         outputs: &[OutPin],
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
     ) {
         let _ = (style, node, inputs, outputs, snarl);
     }
@@ -96,7 +96,7 @@ pub trait SnarlViewer<T> {
         node: NodeId,
         inputs: &[InPin],
         outputs: &[OutPin],
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
     ) -> NodeLayout {
         let _ = (node, inputs, outputs, snarl);
         default
@@ -115,7 +115,7 @@ pub trait SnarlViewer<T> {
         inputs: &[InPin],
         outputs: &[OutPin],
         ui: &mut Ui,
-        snarl: &mut Snarl<T>,
+        snarl: &mut Snarl<T, G>,
     ) {
         ui.horizontal(|ui| {
             ui.label(self.title(&snarl[node]));
@@ -138,7 +138,7 @@ pub trait SnarlViewer<T> {
         inputs: &[InPin],
         outputs: &[OutPin],
         ui: &mut Ui,
-        snarl: &mut Snarl<T>,
+        snarl: &mut Snarl<T, G>,
     ) {
         let _ = (node, inputs, outputs, ui, snarl);
     }
@@ -158,7 +158,7 @@ pub trait SnarlViewer<T> {
         pin: &InPin,
         ui: &mut Ui,
         context: PinContext,
-        snarl: &mut Snarl<T>,
+        snarl: &mut Snarl<T, G>,
     ) -> impl SnarlPin + 'static;
 
     /// Returns number of output pins of the node.
@@ -176,7 +176,7 @@ pub trait SnarlViewer<T> {
         pin: &OutPin,
         ui: &mut Ui,
         context: PinContext,
-        snarl: &mut Snarl<T>,
+        snarl: &mut Snarl<T, G>,
     ) -> impl SnarlPin + 'static;
 
     /// Checks if node has something to show in body - between input and output pins.
@@ -194,7 +194,7 @@ pub trait SnarlViewer<T> {
         inputs: &[InPin],
         outputs: &[OutPin],
         ui: &mut Ui,
-        snarl: &mut Snarl<T>,
+        snarl: &mut Snarl<T, G>,
     ) {
         let _ = (node, inputs, outputs, ui, snarl);
     }
@@ -214,7 +214,7 @@ pub trait SnarlViewer<T> {
         inputs: &[InPin],
         outputs: &[OutPin],
         ui: &mut Ui,
-        snarl: &mut Snarl<T>,
+        snarl: &mut Snarl<T, G>,
     ) {
         let _ = (node, inputs, outputs, ui, snarl);
     }
@@ -224,7 +224,7 @@ pub trait SnarlViewer<T> {
     /// It aimed to be used for custom positioning of nodes that requires node dimensions for calculations.
     /// Node's position can be modified directly in this method.
     #[inline]
-    fn final_node_rect(&mut self, node: NodeId, rect: Rect, ui: &mut Ui, snarl: &mut Snarl<T>) {
+    fn final_node_rect(&mut self, node: NodeId, rect: Rect, ui: &mut Ui, snarl: &mut Snarl<T, G>) {
         let _ = (node, rect, ui, snarl);
     }
 
@@ -243,7 +243,7 @@ pub trait SnarlViewer<T> {
         inputs: &[InPin],
         outputs: &[OutPin],
         ui: &mut Ui,
-        snarl: &mut Snarl<T>,
+        snarl: &mut Snarl<T, G>,
     ) {
         let _ = (node, inputs, outputs, ui, snarl);
     }
@@ -263,7 +263,7 @@ pub trait SnarlViewer<T> {
         &mut self,
         from: &OutPinId,
         to: &InPinId,
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
     ) -> Option<Vec<Pos2>> {
         let _ = (from, to, snarl);
         None
@@ -280,7 +280,7 @@ pub trait SnarlViewer<T> {
         &mut self,
         from: &OutPinId,
         to: &InPinId,
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
     ) -> Vec<WireWidgetDescriptor> {
         let _ = (from, to, snarl);
         vec![]
@@ -301,7 +301,7 @@ pub trait SnarlViewer<T> {
         from: &OutPin,
         to: &InPin,
         ui: &mut Ui,
-        snarl: &mut Snarl<T>,
+        snarl: &mut Snarl<T, G>,
     ) {
         let _ = (index, context, from, to, ui, snarl);
     }
@@ -319,7 +319,7 @@ pub trait SnarlViewer<T> {
         from: &OutPinId,
         to: &InPinId,
         response: &Response,
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
     ) -> bool {
         let _ = (from, to, response, snarl);
         false
@@ -327,7 +327,7 @@ pub trait SnarlViewer<T> {
 
     /// Checks if the snarl has something to show in context menu if right-clicked or long-touched on empty space at `pos`.
     #[inline]
-    fn has_graph_menu(&mut self, pos: Pos2, snarl: &mut Snarl<T>) -> bool {
+    fn has_graph_menu(&mut self, pos: Pos2, snarl: &mut Snarl<T, G>) -> bool {
         let _ = (pos, snarl);
         false
     }
@@ -336,13 +336,13 @@ pub trait SnarlViewer<T> {
     ///
     /// This can be used to implement menu for adding new nodes.
     #[inline]
-    fn show_graph_menu(&mut self, pos: Pos2, ui: &mut Ui, snarl: &mut Snarl<T>) {
+    fn show_graph_menu(&mut self, pos: Pos2, ui: &mut Ui, snarl: &mut Snarl<T, G>) {
         let _ = (pos, ui, snarl);
     }
 
     /// Checks if the snarl has something to show in context menu if wire drag is stopped at `pos`.
     #[inline]
-    fn has_dropped_wire_menu(&mut self, src_pins: AnyPins, snarl: &mut Snarl<T>) -> bool {
+    fn has_dropped_wire_menu(&mut self, src_pins: AnyPins, snarl: &mut Snarl<T, G>) -> bool {
         let _ = (src_pins, snarl);
         false
     }
@@ -356,7 +356,7 @@ pub trait SnarlViewer<T> {
         pos: Pos2,
         ui: &mut Ui,
         src_pins: AnyPins,
-        snarl: &mut Snarl<T>,
+        snarl: &mut Snarl<T, G>,
     ) {
         let _ = (pos, ui, src_pins, snarl);
     }
@@ -378,7 +378,7 @@ pub trait SnarlViewer<T> {
         inputs: &[InPin],
         outputs: &[OutPin],
         ui: &mut Ui,
-        snarl: &mut Snarl<T>,
+        snarl: &mut Snarl<T, G>,
     ) {
         let _ = (node, inputs, outputs, ui, snarl);
     }
@@ -388,13 +388,13 @@ pub trait SnarlViewer<T> {
     /// This is usually happens when user drags a wire from one node's output pin to another node's input pin or vice versa.
     /// By default this method connects the pins and returns `Ok(())`.
     #[inline]
-    fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<T>) {
+    fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<T, G>) {
         snarl.connect(from.id, to.id);
     }
 
     /// Asks the viewer to disconnect two pins.
     #[inline]
-    fn disconnect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<T>) {
+    fn disconnect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<T, G>) {
         snarl.disconnect(from.id, to.id);
     }
 
@@ -403,7 +403,7 @@ pub trait SnarlViewer<T> {
     /// This is usually happens when right-clicking on an output pin.
     /// By default this method disconnects the pins and returns `Ok(())`.
     #[inline]
-    fn drop_outputs(&mut self, pin: &OutPin, snarl: &mut Snarl<T>) {
+    fn drop_outputs(&mut self, pin: &OutPin, snarl: &mut Snarl<T, G>) {
         snarl.drop_outputs(pin.id);
     }
 
@@ -412,7 +412,7 @@ pub trait SnarlViewer<T> {
     /// This is usually happens when right-clicking on an input pin.
     /// By default this method disconnects the pins and returns `Ok(())`.
     #[inline]
-    fn drop_inputs(&mut self, pin: &InPin, snarl: &mut Snarl<T>) {
+    fn drop_inputs(&mut self, pin: &InPin, snarl: &mut Snarl<T, G>) {
         snarl.drop_inputs(pin.id);
     }
 
@@ -423,7 +423,7 @@ pub trait SnarlViewer<T> {
     ///
     /// The `new_pos` parameter contains the node's new position in graph coordinates.
     #[inline]
-    fn node_moved(&mut self, node: NodeId, new_pos: Pos2, snarl: &mut Snarl<T>) {
+    fn node_moved(&mut self, node: NodeId, new_pos: Pos2, snarl: &mut Snarl<T, G>) {
         let _ = (node, new_pos, snarl);
     }
 
@@ -441,7 +441,7 @@ pub trait SnarlViewer<T> {
         snarl_style: &SnarlStyle,
         style: &Style,
         painter: &Painter,
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
     ) {
         let _ = snarl;
 
@@ -463,7 +463,7 @@ pub trait SnarlViewer<T> {
         snarl_style: &SnarlStyle,
         style: &Style,
         painter: &Painter,
-        snarl: &Snarl<T>,
+        snarl: &Snarl<T, G>,
     ) {
         let _ = (viewport, snarl_style, style, painter, snarl);
     }
@@ -480,7 +480,7 @@ pub trait SnarlViewer<T> {
     ///
     /// By default returns an empty map (no layout changes).
     #[inline]
-    fn compute_layout(&mut self, snarl: &Snarl<T>) -> std::collections::HashMap<NodeId, Pos2> {
+    fn compute_layout(&mut self, snarl: &Snarl<T, G>) -> std::collections::HashMap<NodeId, Pos2> {
         let _ = snarl;
         std::collections::HashMap::new()
     }
@@ -492,7 +492,7 @@ pub trait SnarlViewer<T> {
     ///
     /// By default returns false (no automatic layout).
     #[inline]
-    fn apply_layout(&mut self, snarl: &Snarl<T>) -> bool {
+    fn apply_layout(&mut self, snarl: &Snarl<T, G>) -> bool {
         let _ = snarl;
         false
     }
@@ -504,7 +504,7 @@ pub trait SnarlViewer<T> {
     ///
     /// By default it does nothing.
     #[inline]
-    fn current_transform(&mut self, to_global: &mut TSTransform, snarl: &mut Snarl<T>) {
+    fn current_transform(&mut self, to_global: &mut TSTransform, snarl: &mut Snarl<T, G>) {
         let _ = (to_global, snarl);
     }
 
@@ -517,5 +517,88 @@ pub trait SnarlViewer<T> {
     fn update_selection(&mut self, selected_nodes: &[NodeId]) -> Option<Vec<NodeId>> {
         let _ = selected_nodes;
         None
+    }
+
+    // --- Group methods ---
+
+    /// Returns the title of a group.
+    ///
+    /// By default returns the group's stored title.
+    #[inline]
+    fn group_title(&mut self, group: GroupId, snarl: &Snarl<T, G>) -> String {
+        snarl
+            .group_info(group)
+            .map_or_else(String::new, |g| g.title.clone())
+    }
+
+    /// Returns the frame used to draw the group background.
+    ///
+    /// Override this to customize group appearance per-group.
+    #[inline]
+    fn group_frame(
+        &mut self,
+        default: egui::Frame,
+        group: GroupId,
+        snarl: &Snarl<T, G>,
+    ) -> egui::Frame {
+        let _ = (group, snarl);
+        default
+    }
+
+    /// Renders custom content in the group header.
+    ///
+    /// By default shows the group title.
+    #[inline]
+    fn show_group_header(
+        &mut self,
+        group: GroupId,
+        ui: &mut Ui,
+        snarl: &mut Snarl<T, G>,
+    ) {
+        let title = self.group_title(group, snarl);
+        ui.label(title);
+    }
+
+    /// Called when a node is about to be added to a group by drag.
+    /// Return `false` to prevent the addition.
+    #[inline]
+    fn accept_node_in_group(
+        &mut self,
+        node: NodeId,
+        group: GroupId,
+        snarl: &Snarl<T, G>,
+    ) -> bool {
+        let _ = (node, group, snarl);
+        true
+    }
+
+    /// Called after a node's group membership changes.
+    #[inline]
+    fn node_group_changed(
+        &mut self,
+        node: NodeId,
+        old_group: Option<GroupId>,
+        new_group: Option<GroupId>,
+        snarl: &mut Snarl<T, G>,
+    ) {
+        let _ = (node, old_group, new_group, snarl);
+    }
+
+    /// Checks if the group has a context menu.
+    #[inline]
+    fn has_group_menu(&mut self, group: GroupId, snarl: &Snarl<T, G>) -> bool {
+        let _ = (group, snarl);
+        false
+    }
+
+    /// Shows the context menu for a group.
+    #[inline]
+    fn show_group_menu(
+        &mut self,
+        group: GroupId,
+        ui: &mut Ui,
+        snarl: &mut Snarl<T, G>,
+    ) {
+        let _ = (group, ui, snarl);
     }
 }
