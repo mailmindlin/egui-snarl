@@ -292,17 +292,26 @@ impl SnapGrid {
 ///
 /// ## Nodes
 ///
-/// | Action                 | Default | Configured by |
-/// |------------------------|---------|---------------|
-/// | Select                 | Left-click | [`click_node`](Self::click_node) |
-/// | Drag                   | Left-drag | [`drag_node`](Self::drag_node) |
-/// | Add to selection       | Shift + Left-click | [`select_node`](Self::select_node) |
-/// | Remove from selection  | Cmd/Ctrl + Left-click | [`deselect_node`](Self::deselect_node) |
-/// | Rectangle select       | Shift + Left-drag on empty space | [`rect_select`](Self::rect_select) |
-/// | Deselect all           | Cmd/Ctrl + Left-click on empty space | [`deselect_all_nodes`](Self::deselect_all_nodes) |
-/// | Open node context menu | Right-click on node | Not configurable |
-/// | Collapse/expand node   | Left-click on header | [`click_header`](Self::click_header) |
+/// | Action                | Default | Configured by |
+/// |-----------------------|---------|---------------|
+/// | Select                | Left-click | [`click_node`](Self::click_node) |
+/// | Drag                  | Left-drag | [`drag_node`](Self::drag_node) |
+/// | Add to selection      | Shift + Left-click | [`select_node`](Self::select_node) |
+/// | Remove from selection | Cmd/Ctrl + Left-click | [`deselect_node`](Self::deselect_node) |
+/// | Rectangle select      | Shift + Left-drag on empty space | [`rect_select`](Self::rect_select) |
+/// | Deselect all          | Cmd/Ctrl + Left-click on empty space | [`deselect_all_nodes`](Self::deselect_all_nodes) |
+/// | Node context menu     | Right-click on node | Not configurable |
+/// | Collapse/expand node  | Left-click on header | [`click_header`](Self::click_header) |
 ///
+/// ## Groups
+///
+/// | Action                          | Default                  | Notes |
+/// |---------------------------------|--------------------------|-------|
+/// | Select group                    | Left-click group         | [`click_group`](Self::click_group) |
+/// | Add/remove group from selection | Shift + Left-click group | [`select_group`](Self::select_group) |
+/// | Drag                            | Left-drag group header   | [`drag_group`](Self::drag_group) |
+/// | Group context menu              | Right-click group        | Not configurable |
+/// 
 /// ## Wires
 ///
 /// | Action                                 | Default | Configured by |
@@ -388,6 +397,22 @@ pub struct SnarlConfig {
     /// Defaults to no modifiers + [`PointerButton::Primary`].
     pub click_header: ModifierClick,
 
+    /// Action used to click a group, deselecting all other groups and selecting this one.
+    ///
+    /// Defaults to no modifiers + [`PointerButton::Primary`].
+    pub click_group: ModifierClick,
+
+    /// Action used to toggle a group's membership in the current selection
+    /// (adds if not selected, removes if already selected).
+    ///
+    /// Defaults to [`Modifiers::SHIFT`] + [`PointerButton::Primary`].
+    pub select_group: ModifierClick,
+
+    /// Action used to drag a group (and all its children) to a new position.
+    ///
+    /// Defaults to no modifiers + [`PointerButton::Primary`].
+    pub drag_group: ModifierClick,
+
     /// When `true`, only a single node can be selected at a time,
     /// and clicking a node will deselect any previously selected nodes.
     /// 
@@ -465,6 +490,18 @@ impl SnarlConfig {
                 mouse_button: PointerButton::Primary,
             },
             click_header: ModifierClick {
+                modifiers: Modifiers::NONE,
+                mouse_button: PointerButton::Primary,
+            },
+            click_group: ModifierClick {
+                modifiers: Modifiers::NONE,
+                mouse_button: PointerButton::Primary,
+            },
+            select_group: ModifierClick {
+                modifiers: Modifiers::SHIFT,
+                mouse_button: PointerButton::Primary,
+            },
+            drag_group: ModifierClick {
                 modifiers: Modifiers::NONE,
                 mouse_button: PointerButton::Primary,
             },
