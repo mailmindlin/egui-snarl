@@ -47,7 +47,8 @@ struct NodeData {
 }
 
 impl NodeState {
-    pub fn load(cx: &Context, id: Id, spacing: &Spacing) -> Self {
+    pub fn load(cx: &Context, snarl_id: Id, node_id: NodeId, spacing: &Spacing) -> Self {
+        let id = snarl_id.with(("snarl-node", node_id));
         cx.data(|d| d.get_temp::<NodeData>(id)).map_or_else(
             || {
                 cx.request_discard("NodeState initialization");

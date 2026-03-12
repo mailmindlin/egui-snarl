@@ -2710,7 +2710,7 @@ where
 
     let openness = ui.ctx().animate_bool(node_id, open);
 
-    let mut node_state = NodeState::load(ui.ctx(), node_id, ui.spacing());
+    let mut node_state = NodeState::load(ui.ctx(), snarl_id, node, ui.spacing());
 
     let node_rect = node_state.node_rect(node_pos, openness);
 
