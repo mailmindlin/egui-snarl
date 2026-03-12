@@ -199,7 +199,9 @@ impl NodeState {
 
 #[derive(Clone)]
 pub enum NewWires {
+    /// Dragging from input pins — looking for an output to connect to.
     In(SmallVec<[InPinId; 4]>),
+    /// Dragging from output pins — looking for an input to connect to.
     Out(SmallVec<[OutPinId; 4]>),
 }
 
