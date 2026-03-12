@@ -5,11 +5,11 @@ use std::collections::HashMap;
 use eframe::{App, CreationContext};
 use egui::{Color32, Id, Modifiers, PointerButton, Ui};
 use egui_snarl::{
-    InPin, InPinId, NodeId, OutPin, OutPinId, Snarl,
+    GroupId, InPin, InPinId, NodeId, OutPin, OutPinId, Snarl,
     ui::{
         AnyPins, ModifierClick, NodeLayout, PinContext, PinInfo, PinPlacement, SnarlConfig,
         SnarlStyle, SnarlViewer, SnarlWidget, WireStyle, WireWidgetContext, WireWidgetDescriptor,
-        selected_nodes,
+        selected_groups, selected_nodes,
     },
 };
 
@@ -464,6 +464,27 @@ impl SnarlViewer<DemoNode> for DemoViewer {
             snarl.insert_node(pos, DemoNode::Sink);
             ui.close();
         }
+
+        ui.separator();
+        ui.label("Groups");
+
+        if ui.button("New Group").clicked() {
+            let count = snarl.groups().count();
+            snarl.insert_group(pos, format!("Group {}", count + 1), ());
+            ui.close();
+        }
+
+        let selected = selected_nodes(Id::new("snarl-demo"), ui.ctx());
+        if !selected.is_empty() {
+            if ui.button("Group Selected Nodes").clicked() {
+                let count = snarl.groups().count();
+                let group_id = snarl.insert_group(pos, format!("Group {}", count + 1), ());
+                for node_id in &selected {
+                    snarl.set_node_group(*node_id, Some(group_id));
+                }
+                ui.close();
+            }
+        }
     }
 
     fn has_dropped_wire_menu(&mut self, _src_pins: AnyPins, _snarl: &mut Snarl<DemoNode>) -> bool {
@@ -608,6 +629,34 @@ impl SnarlViewer<DemoNode> for DemoViewer {
             snarl.remove_node(node);
             ui.close();
         }
+
+        // Group membership submenu
+        let groups: Vec<(GroupId, String)> = snarl
+            .groups()
+            .map(|(id, g)| (id, g.title.clone()))
+            .collect();
+
+        if !groups.is_empty() {
+            let current_group = snarl.node_info(node).and_then(|n| n.group);
+            ui.separator();
+            ui.menu_button("Move to Group", |ui| {
+                if current_group.is_some() && ui.button("None (remove from group)").clicked() {
+                    snarl.set_node_group(node, None);
+                    ui.close();
+                }
+                for (gid, title) in &groups {
+                    let label = if current_group == Some(*gid) {
+                        format!("✓ {title}")
+                    } else {
+                        title.clone()
+                    };
+                    if ui.button(label).clicked() {
+                        snarl.set_node_group(node, Some(*gid));
+                        ui.close();
+                    }
+                }
+            });
+        }
     }
 
     fn has_on_hover_popup(&mut self, _: &DemoNode) -> bool {
@@ -731,6 +780,65 @@ impl SnarlViewer<DemoNode> for DemoViewer {
             response.clone().on_hover_text(format!("Wire type: {type_name}"));
         }
         false
+    }
+
+    fn has_group_menu(&mut self, _group: GroupId, _snarl: &Snarl<DemoNode>) -> bool {
+        true
+    }
+
+    fn show_group_menu(
+        &mut self,
+        group: GroupId,
+        ui: &mut Ui,
+        snarl: &mut Snarl<DemoNode>,
+    ) {
+        ui.label("Group menu");
+
+        // Rename
+        if let Some(g) = snarl.group_info_mut(group) {
+            let mut title = g.title.clone();
+            ui.horizontal(|ui| {
+                ui.label("Name:");
+                if ui.text_edit_singleline(&mut title).changed() {
+                    snarl.group_info_mut(group).unwrap().title = title;
+                }
+            });
+        }
+
+        ui.separator();
+
+        // Nest inside another group
+        let groups: Vec<(GroupId, String)> = snarl
+            .groups()
+            .filter(|(id, _)| *id != group)
+            .map(|(id, g)| (id, g.title.clone()))
+            .collect();
+
+        if !groups.is_empty() {
+            let current_parent = snarl.group_info(group).and_then(|g| g.parent);
+            ui.menu_button("Set Parent Group", |ui| {
+                if current_parent.is_some() && ui.button("None (top-level)").clicked() {
+                    snarl.set_group_parent(group, None);
+                    ui.close();
+                }
+                for (gid, title) in &groups {
+                    let label = if current_parent == Some(*gid) {
+                        format!("✓ {title}")
+                    } else {
+                        title.clone()
+                    };
+                    if ui.button(label).clicked() {
+                        snarl.set_group_parent(group, Some(*gid));
+                        ui.close();
+                    }
+                }
+            });
+        }
+
+        if ui.button("Delete Group").clicked() {
+            snarl.remove_group(group);
+            ui.close();
+        }
     }
 }
 
@@ -1162,6 +1270,31 @@ impl App for DemoApp {
 
                 if let Some(id) = remove {
                     self.snarl.remove_node(id);
+                }
+
+                ui.add_space(16.0);
+                ui.strong("Groups");
+
+                let mut remove_group = None;
+                let groups: Vec<_> = self.snarl.groups().map(|(id, g)| (id, g.title.clone(), g.open)).collect();
+                let sel_groups = selected_groups(Id::new("snarl-demo"), ui.ctx());
+
+                for (id, title, open) in &groups {
+                    let selected = sel_groups.contains(id);
+                    ui.horizontal(|ui| {
+                        let prefix = if *open { "▼" } else { "▶" };
+                        let sel_marker = if selected { " ●" } else { "" };
+                        ui.label(format!("{prefix} {title}{sel_marker}"));
+                        let node_count = self.snarl.group_nodes(*id).count();
+                        ui.label(format!("({node_count} nodes)"));
+                        if ui.button("Delete").clicked() {
+                            remove_group = Some(*id);
+                        }
+                    });
+                }
+
+                if let Some(id) = remove_group {
+                    self.snarl.remove_group(id);
                 }
             });
         });
