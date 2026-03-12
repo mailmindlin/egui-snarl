@@ -13,7 +13,7 @@
     clippy::style,
     clippy::suspicious
 )]
-#![warn(clippy::pedantic, clippy::dbg_macro, clippy::must_use_candidate)]
+#![warn(clippy::pedantic, clippy::dbg_macro, clippy::must_use_candidate, missing_docs)]
 #![allow(clippy::range_plus_one, clippy::inline_always, clippy::use_self)]
 
 pub mod ui;
