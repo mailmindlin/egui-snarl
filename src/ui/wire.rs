@@ -573,7 +573,7 @@ where
     let vertical_wire = style.vertical_wire(from_r.pos, to_r.pos);
 
     draw_wire(
-        &ui,
+        ui,
         WireId::Connected {
             snarl_id,
             out_pin: wire.out_pin,

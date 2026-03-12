@@ -1213,7 +1213,7 @@ impl SnarlWidget {
         show_snarl(
             snarl_id,
             self.style,
-            self.config,
+            &self.config,
             self.min_size,
             self.max_size,
             snarl,
@@ -1228,7 +1228,7 @@ impl SnarlWidget {
 fn show_snarl<T, G, V>(
     snarl_id: Id,
     mut style: SnarlStyle,
-    config: SnarlConfig,
+    config: &SnarlConfig,
     min_size: Vec2,
     max_size: Vec2,
     snarl: &mut Snarl<T, G>,
@@ -1378,7 +1378,7 @@ where
     }
 
     // --- Draw groups ---
-    let dragged_nodes = draw_groups(snarl_id, snarl, viewer, &config, &input, group_layer_id, &mut snarl_state, &mut ui);
+    let dragged_nodes = draw_groups(snarl_id, snarl, viewer, config, &input, group_layer_id, &mut snarl_state, &mut ui);
 
     let mut node_moved = None;
     let mut node_to_top = None;
@@ -1445,7 +1445,7 @@ where
             node_idx,
             viewer,
             &mut snarl_state,
-            &config,
+            config,
             &style,
             snarl_id,
             &mut input_info,
@@ -1491,7 +1491,7 @@ where
     };
     // Draw and interact with wires
     for wire in snarl.wires.iter() {
-        let _ = wire::show_wire(wire, &snarl, viewer, &mut ui, snarl_id, &snarl_state, &style, &config, &snarl_resp, &wire_info, &mut wire_resp);
+        let _ = wire::show_wire(wire, snarl, viewer, &mut ui, snarl_id, &snarl_state, &style, config, &snarl_resp, &wire_info, &mut wire_resp);
     }
 
     // Remove hovered wire by second click
@@ -1922,7 +1922,7 @@ where
     snarl_resp
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn draw_groups<T, G, V>(
     snarl_id: Id,
     snarl: &mut Snarl<T, G>,
@@ -1997,7 +1997,7 @@ where
                 }
 
                 // Handle drag
-                if config.drag_group.dragged(&input, &resp) {
+                if config.drag_group.dragged(input, &resp) {
                     let delta = resp.drag_delta();
                     // Move collapsed position
                     let mut gs = GroupState::load(group_ui.ctx(), snarl_id, group_id);
@@ -2013,7 +2013,7 @@ where
                     group_dragged = Some(group_id);
                 }
 
-                if config.drag_group.drag_stopped(&input, &resp) {
+                if config.drag_group.drag_stopped(input, &resp) {
                     group_drag_released = true;
                     if group_dragged.is_none() {
                         group_dragged = Some(group_id);
@@ -2097,7 +2097,7 @@ where
             }
 
             // Drag group header to move all children
-            if config.drag_group.dragged(&input, &resp) {
+            if config.drag_group.dragged(input, &resp) {
                 let delta = resp.drag_delta();
                 // Move the group's own pos
                 snarl.groups[group_id.0].pos += delta;
@@ -2119,7 +2119,7 @@ where
                 group_dragged = Some(group_id);
             }
 
-            if config.drag_group.drag_stopped(&input, &resp) {
+            if config.drag_group.drag_stopped(input, &resp) {
                 group_drag_released = true;
                 if group_dragged.is_none() {
                     group_dragged = Some(group_id);
@@ -2138,13 +2138,13 @@ where
             }
 
             // Click to select group
-            if config.select_group.clicked(&input, &resp) {
+            if config.select_group.clicked(input, &resp) {
                 if snarl_state.selected_groups().contains(&group_id) {
                     snarl_state.deselect_group(group_id);
                 } else {
                     snarl_state.select_group(group_id);
                 }
-            } else if config.click_group.clicked(&input, &resp) {
+            } else if config.click_group.clicked(input, &resp) {
                 snarl_state.deselect_all_groups();
                 snarl_state.select_group(group_id);
             }
@@ -4011,7 +4011,7 @@ impl<T, G> Snarl<T, G> {
         show_snarl(
             ui.make_persistent_id(id_salt),
             *style,
-            *config,
+            config,
             Vec2::ZERO,
             Vec2::INFINITY,
             self,

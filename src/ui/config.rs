@@ -12,14 +12,13 @@ pub struct ModifierClick {
 }
 
 impl ModifierClick {
-    pub(super) fn clicked(&self, inputs: &super::Input, resp: &egui::Response) -> bool {
+    pub(super) fn clicked(self, inputs: &super::Input, resp: &egui::Response) -> bool {
         inputs.modifiers.contains(self.modifiers) && resp.clicked_by(self.mouse_button)
     }
-    pub(super) fn dragged(&self, inputs: &super::Input, resp: &egui::Response) -> bool {
+    pub(super) fn dragged(self, inputs: &super::Input, resp: &egui::Response) -> bool {
         inputs.modifiers.contains(self.modifiers) && resp.dragged_by(self.mouse_button)
     }
-
-    pub(super) fn drag_stopped(&self, inputs: &super::Input, resp: &egui::Response) -> bool {
+    pub(super) fn drag_stopped(self, inputs: &super::Input, resp: &egui::Response) -> bool {
         inputs.modifiers.contains(self.modifiers) && resp.drag_stopped_by(self.mouse_button)
     }
 }
