@@ -277,69 +277,130 @@ impl SnapGrid {
     }
 }
 
-/// Config options for Snarl.
+/// Configuration for the Snarl graph editor's interactions and behaviour.
+///
+/// # User Interface Reference
+///
+/// ## Viewport
+///
+/// | Action          | Default | Notes |
+/// |-----------------|---------|-------|
+/// | Pan             | Middle-click drag or primary-click drag on empty space | |
+/// | Zoom            | Scroll wheel | |
+/// | Fit all in view | Double-click on empty space | |
+/// | Deselect all    | Escape | Not configurable |
+///
+/// ## Nodes
+///
+/// | Action                 | Default | Configured by |
+/// |------------------------|---------|---------------|
+/// | Select                 | Left-click | [`click_node`](Self::click_node) |
+/// | Drag                   | Left-drag | [`drag_node`](Self::drag_node) |
+/// | Add to selection       | Shift + Left-click | [`select_node`](Self::select_node) |
+/// | Remove from selection  | Cmd/Ctrl + Left-click | [`deselect_node`](Self::deselect_node) |
+/// | Rectangle select       | Shift + Left-drag on empty space | [`rect_select`](Self::rect_select) |
+/// | Deselect all           | Cmd/Ctrl + Left-click on empty space | [`deselect_all_nodes`](Self::deselect_all_nodes) |
+/// | Open node context menu | Right-click on node | Not configurable |
+/// | Collapse/expand node   | Left-click on header | [`click_header`](Self::click_header) |
+///
+/// ## Wires
+///
+/// | Action                                 | Default | Configured by |
+/// |----------------------------------------|---------|---------------|
+/// | Start wire drag from pin               | Left-drag on pin | Default `drag_pin` (no modifier) |
+/// | Start multi-wire drag                  | Cmd/Ctrl + Left-drag on pin | [`drag_pin`](Self::drag_pin) |
+/// | Add pin to in-progress multi-drag      | Shift (hover over pin while dragging) | Not configurable |
+/// | Remove pin from in-progress multi-drag | Cmd/Ctrl (hover over pin while dragging) | Not configurable |
+/// | Drop wire without opening menu         | Shift + release on empty space | [`no_menu`](Self::no_menu) |
+/// | Cancel wire drag                       | Right-click while dragging | [`cancel_wire_drag`](Self::cancel_wire_drag) |
+/// | Remove hovered wire                    | Right-click on wire | [`remove_hovered_wire`](Self::remove_hovered_wire) |
+/// | Click pin (e.g. disconnect all)        | Right-click on pin | [`click_pin`](Self::click_pin) |
+/// | Open dropped-wire menu                 | Release wire on empty space | Via [`SnarlViewer::has_dropped_wire_menu()`](super::SnarlViewer::has_dropped_wire_menu) |
+///
+/// ## Grid Snapping
+///
+/// Node positions can be snapped to a grid via [`grid_snap`](Self::grid_snap).
+/// Three grid types are supported: [`SnapGridType::Quad`] (rectangular),
+/// [`SnapGridType::HexPointy`] (pointy-top hexagonal), and [`SnapGridType::HexFlat`]
+/// (flat-top hexagonal).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SnarlConfig {
-    /// Controls key bindings.
-
-    /// Action used to draw selection rect.
-    /// Defaults to [`PointerButton::Primary`] && [`Modifiers::SHIFT`].
+    /// Action used to draw a rectangle selection over multiple nodes.
+    ///
+    /// Defaults to [`Modifiers::SHIFT`] + [`PointerButton::Primary`].
     pub rect_select: ModifierClick,
 
-    /// Action used to remove hovered wire.
-    /// Defaults to [`PointerButton::Secondary`].
+    /// Action used to remove the hovered wire.
+    ///
+    /// Defaults to no modifiers + [`PointerButton::Secondary`].
     pub remove_hovered_wire: ModifierClick,
 
-    /// Action used to deselect all nodes.
-    /// Defaults to [`PointerButton::Primary`].
+    /// Action used to deselect all nodes when clicking on empty space.
+    ///
+    /// Defaults to [`Modifiers::COMMAND`] + [`PointerButton::Primary`].
     pub deselect_all_nodes: ModifierClick,
 
-    /// Action used to cancel wire drag.
-    /// Defaults to [`PointerButton::Secondary`].
+    /// Action used to cancel an in-progress wire drag.
+    ///
+    /// Defaults to no modifiers + [`PointerButton::Secondary`].
     pub cancel_wire_drag: ModifierClick,
 
-    /// Action used to click on pin.
-    /// Defaults to [`PointerButton::Secondary`].
+    /// Action used to click on a pin (e.g. to trigger disconnect-all).
+    ///
+    /// Defaults to no modifiers + [`PointerButton::Secondary`].
     pub click_pin: ModifierClick,
 
-    /// Action used to drag pin.
-    /// Defaults to [`PointerButton::Primary`] && [`Modifiers::COMMAND`].
+    /// Action used to start dragging multiple wires from a pin simultaneously.
+    ///
+    /// Defaults to [`Modifiers::COMMAND`] + [`PointerButton::Primary`].
+    /// 
+    /// (Without this modifier, a plain left-drag starts a single-wire drag.)
     pub drag_pin: ModifierClick,
 
-    /// Action used to avoid popup menu on wire drop.
-    /// Defaults to [`PointerButton::Primary`] && [`Modifiers::SHIFT`].
+    /// Action used to drop a wire on empty space without opening the context menu.
+    ///
+    /// Defaults to [`Modifiers::SHIFT`] + [`PointerButton::Primary`].
     pub no_menu: ModifierClick,
 
-    /// Action used to click node.
-    /// Defaults to [`PointerButton::Primary`].
+    /// Action used to click a node (e.g. to bring it to the front).
+    ///
+    /// Defaults to no modifiers + [`PointerButton::Primary`].
     pub click_node: ModifierClick,
 
-    /// Action used to drag node.
-    /// Defaults to [`PointerButton::Primary`].
+    /// Action used to drag a node to a new position.
+    ///
+    /// Defaults to no modifiers + [`PointerButton::Primary`].
     pub drag_node: ModifierClick,
 
-    /// Action used to select node.
-    /// Defaults to [`PointerButton::Primary`] && [`Modifiers::SHIFT`].
+    /// Action used to add a node to the current selection.
+    ///
+    /// Defaults to [`Modifiers::SHIFT`] + [`PointerButton::Primary`].
     pub select_node: ModifierClick,
 
-    /// Action used to deselect node.
-    /// Defaults to [`PointerButton::Primary`] && [`Modifiers::COMMAND`].
+    /// Action used to remove a node from the current selection.
+    ///
+    /// Defaults to [`Modifiers::COMMAND`] + [`PointerButton::Primary`].
     pub deselect_node: ModifierClick,
 
-    /// Action used to click node header.
-    /// Defaults to [`PointerButton::Primary`].
+    /// Action used to click the node header (e.g. to collapse/expand the node).
+    ///
+    /// Defaults to no modifiers + [`PointerButton::Primary`].
     pub click_header: ModifierClick,
 
-    /// When true, only a single node can be selected at a time.
-    /// Clicking a node will deselect any previously selected nodes.
+    /// When `true`, only a single node can be selected at a time,
+    /// and clicking a node will deselect any previously selected nodes.
+    /// 
     /// Defaults to `false`.
     pub single_select: bool,
 
-    /// Grid configuration for snapping node positions.
-    /// When `Some(grid)`, nodes will snap to the configured grid.
-    /// Set to `None` to disable grid snapping.
-    /// Defaults to `None`.
+    /// Grid snapping configuration for node positions.
+    ///
+    /// When `Some(grid)`, nodes snap to the configured grid after being dragged.
+    /// Supports rectangular ([`SnapGridType::Quad`]) and hexagonal grids
+    /// ([`SnapGridType::HexPointy`], [`SnapGridType::HexFlat`]).
+    /// 
+    /// Set to `None` to disable snapping (the default).
     pub grid_snap: Option<SnapGrid>,
 
     #[doc(hidden)]
