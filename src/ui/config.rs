@@ -11,6 +11,19 @@ pub struct ModifierClick {
     pub mouse_button: PointerButton,
 }
 
+impl ModifierClick {
+    pub(super) fn clicked(&self, inputs: &super::Input, resp: &egui::Response) -> bool {
+        inputs.modifiers.contains(self.modifiers) && resp.clicked_by(self.mouse_button)
+    }
+    pub(super) fn dragged(&self, inputs: &super::Input, resp: &egui::Response) -> bool {
+        inputs.modifiers.contains(self.modifiers) && resp.dragged_by(self.mouse_button)
+    }
+
+    pub(super) fn drag_stopped(&self, inputs: &super::Input, resp: &egui::Response) -> bool {
+        inputs.modifiers.contains(self.modifiers) && resp.drag_stopped_by(self.mouse_button)
+    }
+}
+
 /// Type of snap grid for node positioning.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

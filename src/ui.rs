@@ -1378,7 +1378,7 @@ where
     }
 
     // --- Draw groups ---
-    let dragged_nodes = draw_groups(snarl_id, snarl, viewer, &input, group_layer_id, &mut snarl_state, &mut ui);
+    let dragged_nodes = draw_groups(snarl_id, snarl, viewer, &config, &input, group_layer_id, &mut snarl_state, &mut ui);
 
     let mut node_moved = None;
     let mut node_to_top = None;
@@ -1927,6 +1927,7 @@ fn draw_groups<T, G, V>(
     snarl_id: Id,
     snarl: &mut Snarl<T, G>,
     viewer: &mut V,
+    config: &SnarlConfig,
     input: &Input,
     group_layer_id: LayerId,
     snarl_state: &mut SnarlState,
@@ -1996,7 +1997,7 @@ where
                 }
 
                 // Handle drag
-                if resp.dragged_by(PointerButton::Primary) {
+                if config.drag_group.dragged(&input, &resp) {
                     let delta = resp.drag_delta();
                     // Move collapsed position
                     let mut gs = GroupState::load(group_ui.ctx(), snarl_id, group_id);
@@ -2012,7 +2013,7 @@ where
                     group_dragged = Some(group_id);
                 }
 
-                if resp.drag_stopped_by(PointerButton::Primary) {
+                if config.drag_group.drag_stopped(&input, &resp) {
                     group_drag_released = true;
                     if group_dragged.is_none() {
                         group_dragged = Some(group_id);
@@ -2096,7 +2097,7 @@ where
             }
 
             // Drag group header to move all children
-            if resp.dragged_by(PointerButton::Primary) {
+            if config.drag_group.dragged(&input, &resp) {
                 let delta = resp.drag_delta();
                 // Move the group's own pos
                 snarl.groups[group_id.0].pos += delta;
@@ -2118,7 +2119,7 @@ where
                 group_dragged = Some(group_id);
             }
 
-            if resp.drag_stopped_by(PointerButton::Primary) {
+            if config.drag_group.drag_stopped(&input, &resp) {
                 group_drag_released = true;
                 if group_dragged.is_none() {
                     group_dragged = Some(group_id);
@@ -2137,17 +2138,15 @@ where
             }
 
             // Click to select group
-            if resp.clicked() {
-                if input.modifiers.shift {
-                    if snarl_state.selected_groups().contains(&group_id) {
-                        snarl_state.deselect_group(group_id);
-                    } else {
-                        snarl_state.select_group(group_id);
-                    }
+            if config.select_group.clicked(&input, &resp) {
+                if snarl_state.selected_groups().contains(&group_id) {
+                    snarl_state.deselect_group(group_id);
                 } else {
-                    snarl_state.deselect_all_groups();
                     snarl_state.select_group(group_id);
                 }
+            } else if config.click_group.clicked(&input, &resp) {
+                snarl_state.deselect_all_groups();
+                snarl_state.select_group(group_id);
             }
 
             // Context menu
