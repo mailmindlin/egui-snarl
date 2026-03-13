@@ -522,13 +522,10 @@ pub trait SnarlViewer<T, G = ()> {
     // --- Group methods ---
 
     /// Returns the title of a group.
-    ///
-    /// By default returns the group's stored title.
     #[inline]
     fn group_title(&mut self, group: GroupId, snarl: &Snarl<T, G>) -> String {
-        snarl
-            .group_info(group)
-            .map_or_else(String::new, |g| g.title.clone())
+        let _ = snarl;
+        format!("Group {}", group.0)
     }
 
     /// Returns the frame used to draw the group background.

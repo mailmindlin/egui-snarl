@@ -88,9 +88,6 @@ pub struct Group<G> {
     /// Group generic value.
     pub value: G,
 
-    /// Display title for the group.
-    pub title: String,
-
     /// Flag indicating that the group is open - not collapsed.
     pub open: bool,
 
