@@ -4048,8 +4048,8 @@ fn nearest_rect_edge(rect: Rect, target: Pos2) -> Pos2 {
     let half_h = rect.height() * 0.5;
 
     // Scale factor to reach rect edge along the direction from center to target
-    let scale_x = if dx != 0.0 { half_w / dx.abs() } else { f32::INFINITY };
-    let scale_y = if dy != 0.0 { half_h / dy.abs() } else { f32::INFINITY };
+    let scale_x = if dx == 0.0 { f32::INFINITY } else { half_w / dx.abs() };
+    let scale_y = if dy == 0.0 { f32::INFINITY } else { half_h / dy.abs() };
     let scale = scale_x.min(scale_y);
 
     pos2(center.x + dx * scale, center.y + dy * scale)

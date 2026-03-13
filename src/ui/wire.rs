@@ -401,6 +401,7 @@ pub(super) struct WireResponse<'a> {
     pub wire_widgets: Vec<WireWidgetInfo<'a>>,
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn show_wire<'a, T, G, V>(
     wire: Wire,
     snarl: &Snarl<T, G>,
@@ -1120,7 +1121,6 @@ impl WiresCache {
         cached
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn axis_aligned(&mut self, wire: WireId, args: WireArgs) -> &mut WireCacheAA {
         let cached = self.axis_aligned.entry(wire).or_default();
 
@@ -1674,7 +1674,6 @@ fn turn_samples_number(radius: f32, threshold: f32) -> usize {
     samples.clamp(2, MAX_CURVE_SAMPLES)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_axis_aligned(
     ui: &Ui,
     wire: WireId,
