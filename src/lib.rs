@@ -253,7 +253,8 @@ pub struct Snarl<T, G = ()> {
     // #[cfg_attr(feature = "serde", serde(with = "serde_nodes"))]
     nodes: Slab<Node<T>>,
     wires: Wires,
-    #[cfg_attr(feature = "serde", serde(default))]
+    // We have to provide the path here so it doesn't the unnecessary bound G: Default
+    #[cfg_attr(feature = "serde", serde(default = "Default::default"))]
     groups: Slab<Group<G>>,
 }
 
