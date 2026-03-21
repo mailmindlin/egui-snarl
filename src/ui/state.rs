@@ -885,7 +885,7 @@ impl SnarlState {
     /// Updates group draw order, sorted by nesting depth (parents first).
     pub(crate) fn update_group_draw_order<T, G>(&mut self, snarl: &Snarl<T, G>) -> Vec<GroupId> {
         let group_ids: HashSet<GroupId> = snarl
-            .groups()
+            .groups_ids()
             .map(|(id, _)| id)
             .collect();
 

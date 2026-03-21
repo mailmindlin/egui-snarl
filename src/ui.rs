@@ -1881,7 +1881,7 @@ where
 
             // Find the deepest group whose cached rect contains this node's position
             let mut best_group: Option<(crate::GroupId, u32)> = None;
-            for (gid, group) in snarl.groups() {
+            for (gid, group) in snarl.groups_ids_data() {
                 if !group.open {
                     continue;
                 }
@@ -2183,7 +2183,7 @@ where
         collect_descendant_groups(snarl, dragged_gid, &mut descendant_groups);
 
         let mut best_parent: Option<(crate::GroupId, u32)> = None;
-        for (gid, group) in snarl.groups() {
+        for (gid, group) in snarl.groups_ids_data() {
             if gid == dragged_gid || descendant_groups.contains(&gid) {
                 continue;
             }
