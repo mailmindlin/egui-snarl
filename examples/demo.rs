@@ -39,6 +39,11 @@ enum DemoNode {
     ExprNode(ExprNode),
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DemoGroup {
+    title: String,
+}
+
 impl DemoNode {
     const fn name(&self) -> &str {
         match self {
@@ -98,9 +103,9 @@ impl DemoNode {
 
 struct DemoViewer;
 
-impl SnarlViewer<DemoNode> for DemoViewer {
+impl SnarlViewer<DemoNode, DemoGroup> for DemoViewer {
     #[inline]
-    fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<DemoNode>) {
+    fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<DemoNode, DemoGroup>) {
         // Validate connection
         #[allow(clippy::match_same_arms)] // For match clarity
         match (&snarl[from.id.node], &snarl[to.id.node]) {
@@ -183,7 +188,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         pin: &InPin,
         ui: &mut Ui,
         context: PinContext,
-        snarl: &mut Snarl<DemoNode>,
+        snarl: &mut Snarl<DemoNode, DemoGroup>,
     ) -> PinInfo {
         match snarl[pin.id.node] {
             DemoNode::Sink => {
@@ -401,7 +406,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         pin: &OutPin,
         ui: &mut Ui,
         _context: PinContext,
-        snarl: &mut Snarl<DemoNode>,
+        snarl: &mut Snarl<DemoNode, DemoGroup>,
     ) -> PinInfo {
         match snarl[pin.id.node] {
             DemoNode::Sink => {
@@ -438,11 +443,11 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         }
     }
 
-    fn has_graph_menu(&mut self, _pos: egui::Pos2, _snarl: &mut Snarl<DemoNode>) -> bool {
+    fn has_graph_menu(&mut self, _pos: egui::Pos2, _snarl: &mut Snarl<DemoNode, DemoGroup>) -> bool {
         true
     }
 
-    fn show_graph_menu(&mut self, pos: egui::Pos2, ui: &mut Ui, snarl: &mut Snarl<DemoNode>) {
+    fn show_graph_menu(&mut self, pos: egui::Pos2, ui: &mut Ui, snarl: &mut Snarl<DemoNode, DemoGroup>) {
         ui.label("Add node");
         if ui.button("Number").clicked() {
             snarl.insert_node(pos, DemoNode::Number(0.0));
@@ -470,7 +475,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
 
         if ui.button("New Group").clicked() {
             let count = snarl.groups().count();
-            snarl.insert_group(pos, format!("Group {}", count + 1), ());
+            snarl.insert_group(pos, DemoGroup { title: format!("Group {}", count + 1) });
             ui.close();
         }
 
@@ -478,7 +483,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         if !selected.is_empty() {
             if ui.button("Group Selected Nodes").clicked() {
                 let count = snarl.groups().count();
-                let group_id = snarl.insert_group(pos, format!("Group {}", count + 1), ());
+                let group_id = snarl.insert_group(pos, DemoGroup { title: format!("Group {}", count + 1) });
                 for node_id in &selected {
                     snarl.set_node_group(*node_id, Some(group_id));
                 }
@@ -487,7 +492,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         }
     }
 
-    fn has_dropped_wire_menu(&mut self, _src_pins: AnyPins, _snarl: &mut Snarl<DemoNode>) -> bool {
+    fn has_dropped_wire_menu(&mut self, _src_pins: AnyPins, _snarl: &mut Snarl<DemoNode, DemoGroup>) -> bool {
         true
     }
 
@@ -496,7 +501,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         pos: egui::Pos2,
         ui: &mut Ui,
         src_pins: AnyPins,
-        snarl: &mut Snarl<DemoNode>,
+        snarl: &mut Snarl<DemoNode, DemoGroup>,
     ) {
         // In this demo, we create a context-aware node graph menu, and connect a wire
         // dropped on the fly based on user input to a new node created.
@@ -622,7 +627,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         _inputs: &[InPin],
         _outputs: &[OutPin],
         ui: &mut Ui,
-        snarl: &mut Snarl<DemoNode>,
+        snarl: &mut Snarl<DemoNode, DemoGroup>,
     ) {
         ui.label("Node menu");
         if ui.button("Remove").clicked() {
@@ -632,7 +637,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
 
         // Group membership submenu
         let groups: Vec<(GroupId, String)> = snarl
-            .groups()
+            .groups_ids()
             .map(|(id, g)| (id, g.title.clone()))
             .collect();
 
@@ -669,7 +674,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         _inputs: &[InPin],
         _outputs: &[OutPin],
         ui: &mut Ui,
-        snarl: &mut Snarl<DemoNode>,
+        snarl: &mut Snarl<DemoNode, DemoGroup>,
     ) {
         match snarl[node] {
             DemoNode::Sink => {
@@ -696,7 +701,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         node: NodeId,
         _inputs: &[InPin],
         _outputs: &[OutPin],
-        snarl: &Snarl<DemoNode>,
+        snarl: &Snarl<DemoNode, DemoGroup>,
     ) -> egui::Frame {
         match snarl[node] {
             DemoNode::Sink => frame.fill(egui::Color32::from_rgb(70, 70, 80)),
@@ -711,7 +716,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         &mut self,
         from: &OutPinId,
         _to: &InPinId,
-        snarl: &Snarl<DemoNode>,
+        snarl: &Snarl<DemoNode, DemoGroup>,
     ) -> Vec<WireWidgetDescriptor> {
         match snarl.node(from.node) {
             // Number and Expr wires: show value at 30% and type label at 70%.
@@ -732,7 +737,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         from: &OutPin,
         _to: &InPin,
         ui: &mut Ui,
-        snarl: &mut Snarl<DemoNode>,
+        snarl: &mut Snarl<DemoNode, DemoGroup>,
     ) {
         // Paint a small rounded background behind the label.
         let bg = ui.visuals().window_fill;
@@ -767,7 +772,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         from: &OutPinId,
         _to: &InPinId,
         response: &egui::Response,
-        snarl: &Snarl<DemoNode>,
+        snarl: &Snarl<DemoNode, DemoGroup>,
     ) -> bool {
         // Show a tooltip describing the wire's data type when hovered.
         if response.hovered() {
@@ -782,7 +787,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         false
     }
 
-    fn has_group_menu(&mut self, _group: GroupId, _snarl: &Snarl<DemoNode>) -> bool {
+    fn has_group_menu(&mut self, _group: GroupId, _snarl: &Snarl<DemoNode, DemoGroup>) -> bool {
         true
     }
 
@@ -790,17 +795,17 @@ impl SnarlViewer<DemoNode> for DemoViewer {
         &mut self,
         group: GroupId,
         ui: &mut Ui,
-        snarl: &mut Snarl<DemoNode>,
+        snarl: &mut Snarl<DemoNode, DemoGroup>,
     ) {
         ui.label("Group menu");
 
         // Rename
-        if let Some(g) = snarl.group_info_mut(group) {
+        if let Some(g) = snarl.group_mut(group) {
             let mut title = g.title.clone();
             ui.horizontal(|ui| {
                 ui.label("Name:");
                 if ui.text_edit_singleline(&mut title).changed() {
-                    snarl.group_info_mut(group).unwrap().title = title;
+                    g.title = title;
                 }
             });
         }
@@ -809,7 +814,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
 
         // Nest inside another group
         let groups: Vec<(GroupId, String)> = snarl
-            .groups()
+            .groups_ids()
             .filter(|(id, _)| *id != group)
             .map(|(id, g)| (id, g.title.clone()))
             .collect();
@@ -1127,7 +1132,7 @@ impl Expr {
 }
 
 pub struct DemoApp {
-    snarl: Snarl<DemoNode>,
+    snarl: Snarl<DemoNode, DemoGroup>,
     style: SnarlStyle,
     config: SnarlConfig,
 }
@@ -1181,10 +1186,16 @@ impl DemoApp {
         cx.egui_ctx.style_mut(|style| style.animation_time *= 10.0);
 
         let snarl = cx.storage.map_or_else(Snarl::new, |storage| {
-            storage
-                .get_string("snarl")
-                .and_then(|snarl| serde_json::from_str(&snarl).ok())
-                .unwrap_or_default()
+            let json = storage
+                .get_string("snarl").unwrap();
+            let _: Snarl<DemoNode, ()> = serde_json::from_str(&json).unwrap();
+
+            // storage
+            //     .get_string("snarl")
+            //     .and_then(|snarl| serde_json::from_str(&snarl).ok())
+            //     .unwrap_or_default();
+            // x
+            todo!()
         });
         // let snarl = Snarl::new();
 
@@ -1276,7 +1287,7 @@ impl App for DemoApp {
                 ui.strong("Groups");
 
                 let mut remove_group = None;
-                let groups: Vec<_> = self.snarl.groups().map(|(id, g)| (id, g.title.clone(), g.open)).collect();
+                let groups: Vec<_> = self.snarl.groups_ids_data().map(|(id, g)| (id, g.value.title.clone(), g.open)).collect();
                 let sel_groups = selected_groups(Id::new("snarl-demo"), ui.ctx());
 
                 for (id, title, open) in &groups {
