@@ -1251,6 +1251,7 @@ impl App for DemoApp {
         egui::Panel::left("style").show_inside(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui_probe::Probe::new(&mut self.style).show(ui);
+                egui_probe::Probe::new(&mut self.config).show(ui);
             });
         });
 

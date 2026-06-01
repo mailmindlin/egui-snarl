@@ -4,15 +4,7 @@
 use std::{collections::HashMap, hash::Hash};
 
 use egui::{
-    Align, Align2, Color32, CornerRadius, Frame, Id, Key, LayerId, Layout, Margin, Modifiers,
-    PointerButton, Pos2, Rect, Scene, Sense, Stroke, StrokeKind, Style, Ui, UiBuilder,
-    UiKind, UiStackInfo, Vec2,
-    collapsing_header::paint_default_icon,
-    emath::{GuiRounding, RectAlign, TSTransform},
-    epaint::Shadow,
-    pos2,
-    response::Flags,
-    vec2,
+    Align, Align2, Color32, CornerRadius, Frame, Id, Key, LayerId, Layout, Margin, Modifiers, PointerButton, Pos2, Rect, Scene, Sense, Stroke, StrokeKind, Style, Ui, UiBuilder, UiKind, UiStackInfo, Vec2, collapsing_header::paint_default_icon, emath::{GuiRounding, RectAlign, TSTransform}, epaint::Shadow, pos2, response::Flags, vec2
 };
 use egui_scale::EguiScale;
 use smallvec::SmallVec;
@@ -1722,10 +1714,10 @@ where
         wire_painter.add(shape);
     }
 
-    for info in wire_resp.wire_widgets {
+    for info in &wire_resp.wire_widgets {
         let wire_x_length = (info.from_pos.x - info.to_pos.x).abs();
 
-        for (index, descriptor) in info.descriptors.into_iter().enumerate() {
+        for (index, descriptor) in info.descriptors.iter().enumerate() {
             let center = point_on_wire(
                 wire_frame_size,
                 style.upscale_wire_frame(),

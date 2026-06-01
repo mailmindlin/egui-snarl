@@ -1,13 +1,96 @@
 use egui::{Color32, Modifiers, Painter, PointerButton, Pos2, Rect, Stroke};
 
+/// Wrapper around [Modifiers] for egui-probe
+#[cfg(feature="egui-probe")]
+struct ModifiersProbe<'a>(&'a mut Modifiers);
+#[cfg(feature="egui-probe")]
+impl egui_probe::EguiProbe for ModifiersProbe<'_> {
+    fn probe(
+        &mut self,
+        ui: &mut egui::Ui,
+        _: &egui_probe::Style,
+    ) -> egui::Response {
+        ui.weak("Modifiers")
+    }
+    fn iterate_inner(
+        &mut self,
+        ui: &mut egui::Ui,
+        f: &mut dyn FnMut(&str, &mut egui::Ui, &mut dyn egui_probe::EguiProbe),
+    ) {
+        let Modifiers {
+            alt,
+            ctrl,
+            shift,
+            mac_cmd,
+            command,
+        } = self.0;
+        f("alt", ui, alt);
+        f("ctrl", ui, ctrl);
+        f("shift", ui, shift);
+        f("mac_cmd", ui, mac_cmd);
+        f("command", ui, command);
+    }
+}
+
+/// Wrapper around [`PointerButton`] for egui-probe
+#[cfg(feature="egui-probe")]
+struct PointerButtonProbe<'a>(&'a mut PointerButton);
+#[cfg(feature="egui-probe")]
+impl egui_probe::EguiProbe for PointerButtonProbe<'_> {
+    fn probe(
+        &mut self,
+        ui: &mut egui::Ui,
+        style: &egui_probe::Style,
+    ) -> egui::Response {
+        static VARIANTS: [(PointerButton, &str); 5] = [
+            (PointerButton::Primary, "Primary"),
+            (PointerButton::Secondary, "Secondary"),
+            (PointerButton::Middle, "Middle"),
+            (PointerButton::Extra1, "Extra1"),
+            (PointerButton::Extra2, "Extra2"),
+        ];
+        fn variant_labels(current: &mut PointerButton, ui: &mut egui::Ui) {
+            for (value, name) in VARIANTS {
+                let checked = *current == value;
+                if ui.selectable_label(checked, name).clicked() && !checked {
+                    *current = value;
+                }
+            }
+        }
+        ui.horizontal(|ui| {
+            match style.variants {
+                egui_probe::VariantsStyle::Inlined => {
+                    variant_labels(self.0, ui);
+                }
+                egui_probe::VariantsStyle::ComboBox => {
+                    let selected_variant = VARIANTS.iter()
+                        .find(|(value, _)| value == self.0)
+                        .map(|(_, name)| *name)
+                        .unwrap();
+
+                    let cbox = egui::ComboBox::from_id_salt(ui.make_persistent_id("cbox"))
+                            .selected_text(selected_variant);
+                    cbox.show_ui(ui, |ui| {
+                        variant_labels(self.0, ui);
+                    });
+                }
+            }
+        })
+        .response
+    }
+}
+
 /// Struct holding keyboard modifiers and mouse button.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "egui-probe", derive(egui_probe::EguiProbe))]
 pub struct ModifierClick {
     /// Keyboard modifiers for this action.
+    #[cfg_attr(feature="egui-probe", egui_probe(as ModifiersProbe))]
     pub modifiers: Modifiers,
 
     /// Mouse buttons for this action.
+    #[cfg_attr(feature="egui-probe", egui_probe(as PointerButtonProbe))]
     pub mouse_button: PointerButton,
 }
 
@@ -26,6 +109,7 @@ impl ModifierClick {
 /// Type of snap grid for node positioning.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "egui-probe", derive(egui_probe::EguiProbe))]
 #[derive(Default)]
 pub enum SnapGridType {
     /// Square/rectangular grid.
@@ -42,6 +126,7 @@ pub enum SnapGridType {
 /// Configuration for snap grid.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "egui-probe", derive(egui_probe::EguiProbe))]
 pub struct SnapGrid {
     /// The size of each grid cell.
     pub size: f32,
@@ -346,6 +431,7 @@ impl SnapGrid {
 /// (flat-top hexagonal).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "egui-probe", derive(egui_probe::EguiProbe))]
 pub struct SnarlConfig {
     /// Action used to draw a rectangle selection over multiple nodes.
     ///
@@ -375,7 +461,7 @@ pub struct SnarlConfig {
     /// Action used to start dragging multiple wires from a pin simultaneously.
     ///
     /// Defaults to [`Modifiers::COMMAND`] + [`PointerButton::Primary`].
-    /// 
+    ///
     /// (Without this modifier, a plain left-drag starts a single-wire drag.)
     pub drag_pin: ModifierClick,
 
@@ -427,7 +513,7 @@ pub struct SnarlConfig {
 
     /// When `true`, only a single node can be selected at a time,
     /// and clicking a node will deselect any previously selected nodes.
-    /// 
+    ///
     /// Defaults to `false`.
     pub single_select: bool,
 
@@ -436,12 +522,13 @@ pub struct SnarlConfig {
     /// When `Some(grid)`, nodes snap to the configured grid after being dragged.
     /// Supports rectangular ([`SnapGridType::Quad`]) and hexagonal grids
     /// ([`SnapGridType::HexPointy`], [`SnapGridType::HexFlat`]).
-    /// 
+    ///
     /// Set to `None` to disable snapping (the default).
     pub grid_snap: Option<SnapGrid>,
 
     #[doc(hidden)]
     #[cfg_attr(feature = "serde", serde(skip_serializing, default))]
+    #[cfg_attr(feature="egui-probe", egui_probe(skip))]
     /// Do not access other than with .., here to emulate `#[non_exhaustive(pub)]`
     pub _non_exhaustive: (),
 }
