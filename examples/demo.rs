@@ -1187,16 +1187,14 @@ impl DemoApp {
             .global_style_mut(|style| style.animation_time *= 10.0);
 
         let snarl = cx.storage.map_or_else(Snarl::new, |storage| {
-            let json = storage
-                .get_string("snarl").unwrap();
-            let _: Snarl<DemoNode, ()> = serde_json::from_str(&json).unwrap();
+            // let json = storage
+            //     .get_string("snarl").unwrap();
+            // let _: Snarl<DemoNode, ()> = serde_json::from_str(&json).unwrap();
 
-            // storage
-            //     .get_string("snarl")
-            //     .and_then(|snarl| serde_json::from_str(&snarl).ok())
-            //     .unwrap_or_default();
-            // x
-            todo!()
+            storage
+                .get_string("snarl")
+                .and_then(|snarl| serde_json::from_str(&snarl).ok())
+                .unwrap_or_default()
         });
         // let snarl = Snarl::new();
 
