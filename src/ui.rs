@@ -2077,6 +2077,13 @@ where
             // indicate that, when dropped, the item will become a child — and
             // shrink back when dragged out again. Current children are skipped:
             // their geometry is frozen above and must not follow the drag.
+            //
+            // `expanded` is set on the first hover-in. When it is, we seed the
+            // rect with `base_rect` so the group only GROWS toward the incoming
+            // item — the anchor corner stays pinned instead of the whole box
+            // chasing the node (which matters most for an empty group, whose
+            // `content_rect` is otherwise empty and would track the node alone).
+            let mut expanded = false;
             for &dragged_id in dragged_nodes.iter() {
                 if !snarl.nodes.contains(dragged_id.0) {
                     continue;
@@ -2088,6 +2095,10 @@ where
                 if base_rect.contains(node.pos) {
                     let node_state = NodeState::load(group_ui.ctx(), snarl_id, dragged_id, group_ui.spacing());
                     let node_rect = node_state.node_rect(node.pos, if node.open { 1.0 } else { 0.0 });
+                    if !expanded {
+                        group_rect = group_rect.union(base_rect);
+                        expanded = true;
+                    }
                     group_rect = group_rect.union(node_rect);
                     node_state.store(group_ui.ctx());
                 }
@@ -2102,6 +2113,10 @@ where
                 }
                 let child_state = GroupState::load(group_ui.ctx(), snarl_id, dragged_gid);
                 if child_state.rect().is_finite() && base_rect.contains(snarl.groups[dragged_gid.0].pos) {
+                    if !expanded {
+                        group_rect = group_rect.union(base_rect);
+                        expanded = true;
+                    }
                     group_rect = group_rect.union(child_state.rect());
                 }
                 child_state.store(group_ui.ctx());
