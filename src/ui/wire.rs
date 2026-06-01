@@ -452,7 +452,6 @@ where
         }
         WireEndpoint::CollapsedGroup(collapsed_group)
     };
-    println!("Render wire {from_pin:?} => {to_pin:?}");
 
     // Resolve initial positions (center for group-rerouted, actual for visible pins)
     let base_pos = |endpoint: &WireEndpoint| -> Option<(Pos2, Option<Rect>)> {
@@ -482,8 +481,6 @@ where
         Some(rect) => nearest_rect_edge(rect, from_base_pos),
         None => to_base_pos,
     };
-
-    println!("\tpos {from_base_pos}/{from_rect:?}/{from_pos} => {from_base_pos}/{from_rect:?}/{from_pos}");
 
     let from_r_owned;
     let from_r = match from_pin {
