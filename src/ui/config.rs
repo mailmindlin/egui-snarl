@@ -178,7 +178,7 @@ impl SnapGrid {
         let color = self
             .color
             .unwrap_or(Color32::from_rgba_unmultiplied(128, 128, 128, 80));
-        Stroke::new(1.0, color)
+        Stroke::new(1.0_f32, color)
     }
 
     /// Get the effective color for drawing points.
