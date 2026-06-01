@@ -205,6 +205,10 @@ impl NodeState {
 pub struct GroupState {
     /// Cached bounding rect from the previous frame.
     cached_rect: Rect,
+    /// Cached raw union of child geometry from the previous frame, before
+    /// padding and header are applied. Used to freeze a group's geometry while
+    /// one of its children is being dragged, so the group doesn't follow the child.
+    content_rect: Rect,
     /// Position used when the group is collapsed.
     collapsed_pos: Option<Pos2>,
     id: Id,
@@ -214,6 +218,7 @@ pub struct GroupState {
 #[derive(Clone, PartialEq)]
 struct GroupData {
     cached_rect: Rect,
+    content_rect: Rect,
     collapsed_pos: Option<Pos2>,
 }
 
@@ -221,6 +226,7 @@ impl GroupState {
     const fn initial(id: Id) -> Self {
         GroupState {
             cached_rect: Rect::NOTHING,
+            content_rect: Rect::NOTHING,
             collapsed_pos: None,
             id,
             dirty: true,
@@ -231,8 +237,9 @@ impl GroupState {
         let id = snarl_id.with(("group", group));
         let data = cx.data(|d| d.get_temp::<GroupData>(id));
         match data {
-            Some(GroupData { cached_rect, collapsed_pos }) => GroupState {
+            Some(GroupData { cached_rect, content_rect, collapsed_pos }) => GroupState {
                 cached_rect,
+                content_rect,
                 collapsed_pos,
                 id,
                 dirty: false,
@@ -248,6 +255,7 @@ impl GroupState {
                     self.id,
                     GroupData {
                         cached_rect: self.cached_rect,
+                        content_rect: self.content_rect,
                         collapsed_pos: self.collapsed_pos,
                     },
                 );
@@ -255,7 +263,7 @@ impl GroupState {
             cx.request_repaint();
         }
     }
-    
+
     pub const fn rect(&self) -> Rect {
         self.cached_rect
     }
@@ -263,6 +271,18 @@ impl GroupState {
     pub fn set_rect(&mut self, rect: Rect) {
         if self.cached_rect != rect {
             self.cached_rect = rect;
+            self.dirty = true;
+        }
+    }
+
+    /// Raw union of child geometry from the previous frame (before padding/header).
+    pub const fn content_rect(&self) -> Rect {
+        self.content_rect
+    }
+
+    pub fn set_content_rect(&mut self, rect: Rect) {
+        if self.content_rect != rect {
+            self.content_rect = rect;
             self.dirty = true;
         }
     }

@@ -2017,45 +2017,120 @@ where
                 continue;
             }
 
-            // Compute bounding rect from child nodes
-            let mut group_rect = Rect::NOTHING;
+            // Determine whether any current child (node or sub-group) of this
+            // group is being dragged. If so, the group's geometry is "frozen":
+            // it keeps its previous-frame content rect instead of following the
+            // dragged child around. Dragging a child only changes group geometry
+            // once the drag is released and membership is recomputed.
+            let child_being_dragged = dragged_nodes
+                .iter()
+                .any(|id| snarl.nodes.contains(id.0) && snarl.nodes[id.0].group == Some(group_id))
+                || dragged_groups
+                    .iter()
+                    .any(|&gid| snarl.group_info(gid).is_some_and(|g| g.parent == Some(group_id)));
 
-            for (idx, node) in &snarl.nodes {
-                if node.group == Some(group_id) && !dragged_nodes.contains(&NodeId(idx)) {
-                    let node_state = NodeState::load(group_ui.ctx(), snarl_id, NodeId(idx), group_ui.spacing());
+            // Raw union of child geometry (before padding/header). While a child
+            // is being dragged we reuse the frozen content rect from last frame.
+            let mut content_rect = Rect::NOTHING;
+
+            if child_being_dragged {
+                let frozen = GroupState::load(group_ui.ctx(), snarl_id, group_id).content_rect();
+                if frozen.is_finite() {
+                    content_rect = frozen;
+                }
+            } else {
+                // Compute bounding rect from child nodes
+                for (idx, node) in &snarl.nodes {
+                    if node.group == Some(group_id) {
+                        let node_state = NodeState::load(group_ui.ctx(), snarl_id, NodeId(idx), group_ui.spacing());
+                        let node_rect = node_state.node_rect(node.pos, if node.open { 1.0 } else { 0.0 });
+                        content_rect = content_rect.union(node_rect);
+                        node_state.store(group_ui.ctx());
+                    }
+                }
+
+                // Include child group rects
+                for (idx, child_group) in &snarl.groups {
+                    let idx = GroupId(idx);
+                    if child_group.parent == Some(group_id) {
+                        let child_state = GroupState::load(group_ui.ctx(), snarl_id, idx);
+                        if child_state.rect().is_finite() {
+                            content_rect = content_rect.union(child_state.rect());
+                        }
+                        child_state.store(group_ui.ctx());
+                    }
+                }
+            }
+
+            let mut group_rect = content_rect;
+
+            // For empty groups, use the default rect as the base for hit-testing.
+            let base_rect = if content_rect.is_finite() {
+                content_rect
+            } else {
+                let default_size = egui::vec2(150.0, 60.0);
+                Rect::from_min_size(group.pos, default_size)
+            };
+
+            // Include dragged nodes/groups that are NOT current children but are
+            // hovering over this group's base rect. This makes the group grow to
+            // indicate that, when dropped, the item will become a child — and
+            // shrink back when dragged out again. Current children are skipped:
+            // their geometry is frozen above and must not follow the drag.
+            for &dragged_id in dragged_nodes.iter() {
+                if !snarl.nodes.contains(dragged_id.0) {
+                    continue;
+                }
+                let node = &snarl.nodes[dragged_id.0];
+                if node.group == Some(group_id) {
+                    continue;
+                }
+                if base_rect.contains(node.pos) {
+                    let node_state = NodeState::load(group_ui.ctx(), snarl_id, dragged_id, group_ui.spacing());
                     let node_rect = node_state.node_rect(node.pos, if node.open { 1.0 } else { 0.0 });
                     group_rect = group_rect.union(node_rect);
                     node_state.store(group_ui.ctx());
                 }
             }
 
-            // Include child group rects (excluding dragged groups)
-            for (idx, child_group) in &snarl.groups {
-                let idx = GroupId(idx);
-                if child_group.parent == Some(group_id) && !dragged_groups.contains(&idx) {
-                    let child_state = GroupState::load(group_ui.ctx(), snarl_id, idx);
-                    if child_state.rect().is_finite() {
-                        group_rect = group_rect.union(child_state.rect());
-                    }
-                    child_state.store(group_ui.ctx());
+            for &dragged_gid in dragged_groups.iter() {
+                if dragged_gid == group_id {
+                    continue;
                 }
+                if snarl.group_info(dragged_gid).is_some_and(|g| g.parent == Some(group_id)) {
+                    continue;
+                }
+                let child_state = GroupState::load(group_ui.ctx(), snarl_id, dragged_gid);
+                if child_state.rect().is_finite() && base_rect.contains(snarl.groups[dragged_gid.0].pos) {
+                    group_rect = group_rect.union(child_state.rect());
+                }
+                child_state.store(group_ui.ctx());
+            }
+
+            // Anchor the group's persistent position to its committed children
+            // only. Transient hover-expansion (a non-member being dragged in)
+            // grows the drawn rect below but must NOT move the anchor, or an
+            // empty group would chase the node being dragged into it.
+            if content_rect.is_finite() {
+                snarl.groups[group_id.0].pos = content_rect.expand(group_padding).min;
             }
 
             if group_rect.is_finite() {
                 // Expand rect for padding and header
                 group_rect = group_rect.expand(group_padding);
-                // Update stored pos to track the computed rect origin
-                snarl.groups[group_id.0].pos = group_rect.min;
             } else {
-                // Empty group: use stored position with a default size
-                let default_size = egui::vec2(150.0, 60.0);
-                group_rect = Rect::from_min_size(group.pos, default_size);
+                // Empty group with nothing dragged in: use default rect
+                group_rect = base_rect;
             }
             group_rect.min.y -= group_header_height;
 
-            // Cache the computed rect
+            // Cache the computed rect, and persist the frozen child-union for
+            // next frame. (When frozen, content_rect is unchanged; the hover
+            // expansion is NOT baked in, so it can shrink back when a dragged-in
+            // item leaves.)
             let mut group_state = GroupState::load(group_ui.ctx(), snarl_id, group_id);
             group_state.set_rect(group_rect);
+            group_state.set_content_rect(content_rect);
 
             // Draw group background
             let title = viewer.group_title(group_id, snarl);
