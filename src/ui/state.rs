@@ -135,6 +135,7 @@ impl NodeState {
         }
     }
 
+
     pub const fn input_heights(&self) -> &RowHeights {
         &self.input_heights
     }
