@@ -17,12 +17,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `SnarlViewer::current_transform` method to receive and possibly modify the current transform of the snarl's UI layer.
+- `SnarlStyle::pin_hover_scale` option to control or disable pin hover scaling effect. Set to `1.0` to disable hover effect.
+- `Snarl::disconnect_all(node_id)` method to remove all connections to and from a node.
+- `Effects::disconnect_all(node_id)` for deferred disconnection of all node wires.
+- `SnarlViewer::node_moved` callback invoked when a node is dragged to a new position.
+- `SnarlConfig::single_select` option to limit selection to a single node at a time.
+- `SnapGrid` and `SnapGridType` types for configurable snap grids with quad and hex (pointy/flat) variants.
+- `SnarlConfig::grid_snap` now accepts `Option<SnapGrid>` for full grid configuration including type and visibility.
+- `SnarlViewer::show_header_buttons` method for adding buttons/flags to node headers (Houdini-style).
+- `SnarlViewer::draw_foreground` method for drawing comments, annotations, and overlays on top of the graph.
+- `SnarlViewer::wire_waypoints` method for specifying custom wire routing waypoints.
+- `SnarlViewer::compute_layout` and `apply_layout` methods for implementing automatic node layout algorithms.
 
 ### Changed
 
+- `SnarlViewer::show_header` now uses horizontal layout with title on left and header buttons on right.
+- Collapsed nodes now shrink their width to match the header width instead of retaining full content width.
 - Snarl is now scaled using egui's layer scaling mechanism.
   Removes layout twitching when zooming in and out.
   Simplifies interface of `SnarlViewer`.
+- Renamed `Snarl::get_node` to `node`, `get_node_mut` to `node_mut`, `get_node_info` to `node_info`, and `get_node_info_mut` to `node_info_mut` per Rust API guidelines.
+  The old names are deprecated but still available for backwards compatibility.
 
 ## [0.7.1] - 19.02.2025
 

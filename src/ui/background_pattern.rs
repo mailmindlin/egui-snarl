@@ -1,4 +1,4 @@
-use egui::{emath::Rot2, vec2, Painter, Rect, Style, Vec2};
+use egui::{Painter, Rect, Style, Vec2, emath::Rot2, vec2};
 
 use super::SnarlStyle;
 
@@ -47,7 +47,7 @@ impl Grid {
     }
 
     fn draw(&self, viewport: &Rect, snarl_style: &SnarlStyle, style: &Style, painter: &Painter) {
-        let bg_stroke = snarl_style.get_bg_pattern_stroke(style);
+        let bg_stroke = snarl_style.bg_pattern_stroke(style);
 
         let spacing = vec2(self.spacing.x.max(1.0), self.spacing.y.max(1.0));
 

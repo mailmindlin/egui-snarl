@@ -3,12 +3,13 @@
 use std::collections::HashMap;
 
 use eframe::{App, CreationContext};
-use egui::{Color32, Id, Ui};
+use egui::{Color32, Id, Modifiers, PointerButton, Ui};
 use egui_snarl::{
     InPin, InPinId, NodeId, OutPin, OutPinId, Snarl,
     ui::{
-        AnyPins, NodeLayout, PinInfo, PinPlacement, SnarlStyle, SnarlViewer, SnarlWidget,
-        WireStyle, get_selected_nodes,
+        AnyPins, ModifierClick, NodeLayout, PinContext, PinInfo, PinPlacement, SnarlConfig,
+        SnarlStyle, SnarlViewer, SnarlWidget, WireStyle, WireWidgetContext, WireWidgetDescriptor,
+        selected_nodes,
     },
 };
 
@@ -177,21 +178,31 @@ impl SnarlViewer<DemoNode> for DemoViewer {
 
     #[allow(clippy::too_many_lines)]
     #[allow(refining_impl_trait)]
-    fn show_input(&mut self, pin: &InPin, ui: &mut Ui, snarl: &mut Snarl<DemoNode>) -> PinInfo {
+    fn show_input(
+        &mut self,
+        pin: &InPin,
+        ui: &mut Ui,
+        context: PinContext,
+        snarl: &mut Snarl<DemoNode>,
+    ) -> PinInfo {
         match snarl[pin.id.node] {
             DemoNode::Sink => {
                 assert_eq!(pin.id.input, 0, "Sink node has only one input");
 
                 match &*pin.remotes {
                     [] => {
-                        ui.label("None");
+                        if context.label_visible {
+                            ui.label("None");
+                        }
                         PinInfo::circle().with_fill(UNTYPED_COLOR)
                     }
                     [remote] => match snarl[remote.node] {
                         DemoNode::Sink => unreachable!("Sink node has no outputs"),
                         DemoNode::Number(value) => {
                             assert_eq!(remote.output, 0, "Number node has only one output");
-                            ui.label(format_float(value));
+                            if context.label_visible {
+                                ui.label(format_float(value));
+                            }
                             PinInfo::circle().with_fill(NUMBER_COLOR)
                         }
                         DemoNode::String(ref value) => {
@@ -385,7 +396,13 @@ impl SnarlViewer<DemoNode> for DemoViewer {
     }
 
     #[allow(refining_impl_trait)]
-    fn show_output(&mut self, pin: &OutPin, ui: &mut Ui, snarl: &mut Snarl<DemoNode>) -> PinInfo {
+    fn show_output(
+        &mut self,
+        pin: &OutPin,
+        ui: &mut Ui,
+        _context: PinContext,
+        snarl: &mut Snarl<DemoNode>,
+    ) -> PinInfo {
         match snarl[pin.id.node] {
             DemoNode::Sink => {
                 unreachable!("Sink node has no outputs")
@@ -506,7 +523,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                 }
 
                 let src_pin = src_pins[0];
-                let src_out_ty = pin_out_compat(snarl.get_node(src_pin.node).unwrap());
+                let src_out_ty = pin_out_compat(snarl.node(src_pin.node).unwrap());
                 let dst_in_candidates = [
                     ("Sink", (|| DemoNode::Sink) as fn() -> DemoNode, PIN_SINK),
                     ("Show Image", || DemoNode::ShowImage(String::new()), PIN_STR),
@@ -530,7 +547,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
             }
             AnyPins::In(pins) => {
                 let all_src_types = pins.iter().fold(0, |acc, pin| {
-                    acc | pin_in_compat(snarl.get_node(pin.node).unwrap(), pin.input)
+                    acc | pin_in_compat(snarl.node(pin.node).unwrap(), pin.input)
                 });
 
                 let dst_out_candidates = [
@@ -559,7 +576,7 @@ impl SnarlViewer<DemoNode> for DemoViewer {
                         // Connect the wire.
                         for src_pin in pins {
                             let src_ty =
-                                pin_in_compat(snarl.get_node(src_pin.node).unwrap(), src_pin.input);
+                                pin_in_compat(snarl.node(src_pin.node).unwrap(), src_pin.input);
                             if src_ty & dst_ty != 0 {
                                 // In this demo, input pin MUST be unique ...
                                 // Therefore here we drop inputs of source input pin.
@@ -639,6 +656,81 @@ impl SnarlViewer<DemoNode> for DemoViewer {
             DemoNode::ShowImage(_) => frame.fill(egui::Color32::from_rgb(40, 40, 70)),
             DemoNode::ExprNode(_) => frame.fill(egui::Color32::from_rgb(70, 66, 40)),
         }
+    }
+    
+    fn wire_widgets(
+        &mut self,
+        from: &OutPinId,
+        _to: &InPinId,
+        snarl: &Snarl<DemoNode>,
+    ) -> Vec<WireWidgetDescriptor> {
+        match snarl.node(from.node) {
+            // Number and Expr wires: show value at 30% and type label at 70%.
+            Some(DemoNode::Number(_) | DemoNode::ExprNode(_)) => vec![
+                WireWidgetDescriptor::new(0.3),
+                WireWidgetDescriptor::new(0.7),
+            ],
+            // String wires: single widget at the midpoint.
+            Some(DemoNode::String(_)) => vec![WireWidgetDescriptor::default()],
+            _ => vec![],
+        }
+    }
+
+    fn show_wire_widget(
+        &mut self,
+        index: usize,
+        context: &WireWidgetContext,
+        from: &OutPin,
+        _to: &InPin,
+        ui: &mut Ui,
+        snarl: &mut Snarl<DemoNode>,
+    ) {
+        // Paint a small rounded background behind the label.
+        let bg = ui.visuals().window_fill;
+        let rounding = ui.visuals().widgets.noninteractive.corner_radius;
+        let _ = context; // pos/align/gap available if needed
+
+        let label = match (&snarl[from.id.node], index) {
+            (DemoNode::Number(value), 0) => format_float(*value),
+            (DemoNode::Number(_), _) => "num".into(),
+            (DemoNode::ExprNode(expr_node), 0) => format_float(expr_node.eval()),
+            (DemoNode::ExprNode(_), _) => "expr".into(),
+            (DemoNode::String(value), _) => format!("{value:?}"),
+            _ => return,
+        };
+
+        let galley = ui.painter().layout_no_wrap(
+            label,
+            ui.style().text_styles[&egui::TextStyle::Body].clone(),
+            ui.visuals().text_color(),
+        );
+        let padding = egui::vec2(4.0, 2.0);
+        let (rect, _) =
+            ui.allocate_exact_size(galley.size() + padding * 2.0, egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, rounding, bg);
+        ui.painter()
+            .galley(rect.min + padding, galley, Color32::PLACEHOLDER);
+    }
+
+    fn wire_interact(
+        &mut self,
+        from: &OutPinId,
+        _to: &InPinId,
+        response: &egui::Response,
+        snarl: &Snarl<DemoNode>,
+    ) -> bool {
+        // Show a tooltip describing the wire's data type when hovered.
+        if response.hovered() {
+            let type_name = match snarl.node(from.node) {
+                Some(DemoNode::Number(_) | DemoNode::ExprNode(_)) => "Number",
+                Some(DemoNode::String(_)) => "String",
+                Some(DemoNode::ShowImage(_)) => "Image",
+                _ => "Unknown",
+            };
+            response.clone().on_hover_text(format!("Wire type: {type_name}"));
+        }
+        false
     }
 }
 
@@ -929,6 +1021,7 @@ impl Expr {
 pub struct DemoApp {
     snarl: Snarl<DemoNode>,
     style: SnarlStyle,
+    config: SnarlConfig,
 }
 
 const fn default_style() -> SnarlStyle {
@@ -961,11 +1054,24 @@ const fn default_style() -> SnarlStyle {
     }
 }
 
+const fn default_config() -> SnarlConfig {
+    SnarlConfig {
+        // Mouse and keyboard buttons for interaction with the graph
+        // can be configured here, like so:
+        rect_select: ModifierClick {
+            modifiers: Modifiers::SHIFT,
+            mouse_button: PointerButton::Primary,
+        },
+        ..SnarlConfig::new()
+    }
+}
+
 impl DemoApp {
     pub fn new(cx: &CreationContext) -> Self {
         egui_extras::install_image_loaders(&cx.egui_ctx);
 
-        cx.egui_ctx.style_mut(|style| style.animation_time *= 10.0);
+        cx.egui_ctx
+            .global_style_mut(|style| style.animation_time *= 10.0);
 
         let snarl = cx.storage.map_or_else(Snarl::new, |storage| {
             storage
@@ -983,13 +1089,25 @@ impl DemoApp {
         });
         // let style = SnarlStyle::new();
 
-        DemoApp { snarl, style }
+        let config = cx.storage.map_or_else(default_config, |storage| {
+            storage
+                .get_string("config")
+                .and_then(|style| serde_json::from_str(&style).ok())
+                .unwrap_or_else(default_config)
+        });
+        // let config = SnarlConfig::new();
+
+        DemoApp {
+            snarl,
+            style,
+            config,
+        }
     }
 }
 
 impl App for DemoApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::Panel::top("top_panel").show_inside(ui, |ui| {
             // The top panel is often a good place for a menu bar:
 
             egui::MenuBar::new().ui(ui, |ui| {
@@ -997,7 +1115,7 @@ impl App for DemoApp {
                 {
                     ui.menu_button("File", |ui| {
                         if ui.button("Quit").clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            ui.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
                     ui.add_space(16.0);
@@ -1011,18 +1129,18 @@ impl App for DemoApp {
             });
         });
 
-        egui::SidePanel::left("style").show(ctx, |ui| {
+        egui::Panel::left("style").show_inside(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui_probe::Probe::new(&mut self.style).show(ui);
                 egui_probe::Probe::new(&mut self.config).show(ui);
             });
         });
 
-        egui::SidePanel::right("selected-list").show(ctx, |ui| {
+        egui::Panel::right("selected-list").show_inside(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.strong("Selected nodes");
 
-                let selected = get_selected_nodes(Id::new("snarl-demo"), ui.ctx());
+                let selected = selected_nodes(Id::new("snarl-demo"), ui.ctx());
 
                 let mut selected = selected
                     .into_iter()
@@ -1050,10 +1168,11 @@ impl App for DemoApp {
             });
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             SnarlWidget::new()
                 .id(Id::new("snarl-demo"))
                 .style(self.style)
+                .config(self.config)
                 .show(&mut self.snarl, &mut DemoViewer, ui);
         });
     }

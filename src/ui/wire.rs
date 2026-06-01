@@ -1,6 +1,6 @@
 use core::f32;
 
-use egui::{Context, Id, Pos2, Rect, Shape, Stroke, Ui, ahash::HashMap, cache::CacheTrait, pos2};
+use egui::{Align2, Context, Id, Pos2, Rect, Shape, Stroke, Ui, ahash::HashMap, cache::CacheTrait, pos2};
 
 use crate::{InPinId, OutPinId};
 
@@ -10,6 +10,7 @@ const MAX_CURVE_SAMPLES: usize = 100;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "egui-probe", derive(egui_probe::EguiProbe))]
+#[cfg_attr(feature = "facet", derive(facet::Facet), repr(u8))]
 #[derive(Default)]
 pub enum WireLayer {
     /// Wires are rendered behind nodes.
@@ -44,6 +45,7 @@ pub enum WireId {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "egui-probe", derive(egui_probe::EguiProbe))]
+#[cfg_attr(feature = "facet", derive(facet::Facet), repr(u8))]
 #[derive(Default)]
 pub enum WireStyle {
     /// Straight line from one endpoint to another.
@@ -97,8 +99,8 @@ fn adjust_frame_size(
     frame_size
 }
 
-/// Returns 5th degree bezier curve control points for the wire
-fn wire_bezier_5(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 6] {
+/// Returns 5th degree bezier curve control points for horizontal wires (pins on left/right)
+fn wire_bezier_5_horizontal(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 6] {
     let from_norm_x = frame_size;
     let from_2 = pos2(from.x + from_norm_x, from.y);
     let to_norm_x = -from_norm_x;
@@ -222,9 +224,158 @@ fn wire_bezier_5(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 6] {
     }
 }
 
+/// Returns 5th degree bezier curve control points for vertical wires (pins on top/bottom).
+/// This creates Houdini-style connections where wires extend vertically from pins.
+fn wire_bezier_5_vertical(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 6] {
+    #![allow(clippy::many_single_char_names)]
+    // When target is above source, reverse the computation so the wire
+    // exits upward and enters downward, avoiding the overshoot loop.
+    if to.y < from.y {
+        let [a, b, c, d, e, f] = wire_bezier_5_vertical_down(frame_size, to, from);
+        return [f, e, d, c, b, a];
+    }
+    wire_bezier_5_vertical_down(frame_size, from, to)
+}
+
+/// Vertical wire bezier for the "forward" case where `to` is below `from`.
+fn wire_bezier_5_vertical_down(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 6] {
+    // Control points extend in Y direction: exit downward, enter upward.
+    let from_norm_y = frame_size;
+    let from_2 = pos2(from.x, from.y + from_norm_y);
+    let to_norm_y = -from_norm_y;
+    let to_2 = pos2(to.x, to.y + to_norm_y);
+
+    let between = (from_2 - to_2).length();
+
+    if from_2.y <= to_2.y && between >= frame_size * 2.0 {
+        // Simple case: from is above to, enough space for smooth curve
+        let middle_1 = from_2 + (to_2 - from_2).normalized() * frame_size;
+        let middle_2 = to_2 + (from_2 - to_2).normalized() * frame_size;
+
+        [from, from_2, middle_1, middle_2, to_2, to]
+    } else if from_2.y <= to_2.y {
+        // from is above to, but close together
+        let t = (between - (to_2.x - from_2.x).abs())
+            / frame_size.mul_add(2.0, -(to_2.x - from_2.x).abs());
+
+        let mut middle_1 = from_2 + (to_2 - from_2).normalized() * frame_size;
+        let mut middle_2 = to_2 + (from_2 - to_2).normalized() * frame_size;
+
+        if from_2.x >= to_2.x + frame_size {
+            let u = (from_2.x - to_2.x - frame_size) / frame_size;
+
+            let t0_middle_1 = pos2(
+                frame_size.mul_add(-u, from_2.x),
+                (1.0 - u).mul_add(frame_size, from_2.y),
+            );
+            let t0_middle_2 = pos2(to_2.x + frame_size, to_2.y);
+
+            middle_1 = t0_middle_1.lerp(middle_1, t);
+            middle_2 = t0_middle_2.lerp(middle_2, t);
+        } else if from_2.x >= to_2.x {
+            let u = (from_2.x - to_2.x) / frame_size;
+
+            let t0_middle_1 = pos2(
+                frame_size.mul_add(1.0 - u, from_2.x),
+                u.mul_add(frame_size, from_2.y),
+            );
+            let t0_middle_2 = pos2(to_2.x + frame_size, to_2.y);
+
+            middle_1 = t0_middle_1.lerp(middle_1, t);
+            middle_2 = t0_middle_2.lerp(middle_2, t);
+        } else if to_2.x >= from_2.x + frame_size {
+            let u = (to_2.x - from_2.x - frame_size) / frame_size;
+
+            let t0_middle_1 = pos2(from_2.x + frame_size, from_2.y);
+            let t0_middle_2 = pos2(
+                frame_size.mul_add(-u, to_2.x),
+                (1.0 - u).mul_add(-frame_size, to_2.y),
+            );
+
+            middle_1 = t0_middle_1.lerp(middle_1, t);
+            middle_2 = t0_middle_2.lerp(middle_2, t);
+        } else if to_2.x >= from_2.x {
+            let u = (to_2.x - from_2.x) / frame_size;
+
+            let t0_middle_1 = pos2(from_2.x + frame_size, from_2.y);
+            let t0_middle_2 = pos2(
+                frame_size.mul_add(1.0 - u, to_2.x),
+                u.mul_add(-frame_size, to_2.y),
+            );
+
+            middle_1 = t0_middle_1.lerp(middle_1, t);
+            middle_2 = t0_middle_2.lerp(middle_2, t);
+        } else {
+            unreachable!();
+        }
+
+        [from, from_2, middle_1, middle_2, to_2, to]
+    } else if from_2.x >= frame_size.mul_add(2.0, to_2.x) {
+        // from is to the right, wrap around
+        let middle_1 = pos2(from_2.x - frame_size, from_2.y);
+        let middle_2 = pos2(to_2.x + frame_size, to_2.y);
+
+        [from, from_2, middle_1, middle_2, to_2, to]
+    } else if from_2.x >= to_2.x + frame_size {
+        let t = (from_2.x - to_2.x - frame_size) / frame_size;
+
+        let middle_1 = pos2(
+            frame_size.mul_add(-t, from_2.x),
+            (1.0 - t).mul_add(frame_size, from_2.y),
+        );
+        let middle_2 = pos2(to_2.x + frame_size, to_2.y);
+
+        [from, from_2, middle_1, middle_2, to_2, to]
+    } else if from_2.x >= to_2.x {
+        let t = (from_2.x - to_2.x) / frame_size;
+
+        let middle_1 = pos2(
+            frame_size.mul_add(1.0 - t, from_2.x),
+            t.mul_add(frame_size, from_2.y),
+        );
+        let middle_2 = pos2(to_2.x + frame_size, to_2.y);
+
+        [from, from_2, middle_1, middle_2, to_2, to]
+    } else if to_2.x >= frame_size.mul_add(2.0, from_2.x) {
+        // to is to the right
+        let middle_1 = pos2(from_2.x + frame_size, from_2.y);
+        let middle_2 = pos2(to_2.x - frame_size, to_2.y);
+
+        [from, from_2, middle_1, middle_2, to_2, to]
+    } else if to_2.x >= from_2.x + frame_size {
+        let t = (to_2.x - from_2.x - frame_size) / frame_size;
+
+        let middle_1 = pos2(from_2.x + frame_size, from_2.y);
+        let middle_2 = pos2(
+            frame_size.mul_add(-t, to_2.x),
+            (1.0 - t).mul_add(-frame_size, to_2.y),
+        );
+
+        [from, from_2, middle_1, middle_2, to_2, to]
+    } else if to_2.x >= from_2.x {
+        let t = (to_2.x - from_2.x) / frame_size;
+
+        let middle_1 = pos2(from_2.x + frame_size, from_2.y);
+        let middle_2 = pos2(
+            frame_size.mul_add(1.0 - t, to_2.x),
+            t.mul_add(-frame_size, to_2.y),
+        );
+
+        [from, from_2, middle_1, middle_2, to_2, to]
+    } else {
+        unreachable!();
+    }
+}
+
 /// Returns 3rd degree bezier curve control points for the wire
 fn wire_bezier_3(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 4] {
-    let [a, b, _, _, c, d] = wire_bezier_5(frame_size, from, to);
+    let [a, b, _, _, c, d] = wire_bezier_5_horizontal(frame_size, from, to);
+    [a, b, c, d]
+}
+
+/// Returns 3rd degree bezier curve control points for vertical wires
+fn wire_bezier_3_vertical(frame_size: f32, from: Pos2, to: Pos2) -> [Pos2; 4] {
+    let [a, b, _, _, c, d] = wire_bezier_5_vertical(frame_size, from, to);
     [a, b, c, d]
 }
 
@@ -241,6 +392,7 @@ pub fn draw_wire(
     mut stroke: Stroke,
     threshold: f32,
     style: WireStyle,
+    vertical: bool,
 ) {
     if !ui.is_visible() {
         return;
@@ -258,6 +410,7 @@ pub fn draw_wire(
         from,
         to,
         radius: 0.0,
+        vertical,
     };
 
     match style {
@@ -297,6 +450,7 @@ pub fn hit_wire(
     pos: Pos2,
     hit_threshold: f32,
     style: WireStyle,
+    vertical: bool,
 ) -> bool {
     let frame_size = adjust_frame_size(frame_size, upscale, downscale, from, to);
 
@@ -305,6 +459,7 @@ pub fn hit_wire(
         from,
         to,
         radius: 0.0,
+        vertical,
     };
 
     match style {
@@ -484,6 +639,7 @@ struct WireArgs {
     from: Pos2,
     to: Pos2,
     radius: f32,
+    vertical: bool,
 }
 
 impl Default for WireArgs {
@@ -493,6 +649,7 @@ impl Default for WireArgs {
             from: Pos2::ZERO,
             to: Pos2::ZERO,
             radius: 0.0,
+            vertical: false,
         }
     }
 }
@@ -678,14 +835,10 @@ impl CacheTrait for WiresCache {
     fn len(&self) -> usize {
         self.bezier_3.len() + self.bezier_5.len() + self.axis_aligned.len()
     }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 impl WiresCache {
-    pub fn get_3(&mut self, wire: WireId, args: WireArgs) -> &mut WireCache3 {
+    pub fn bezier_3(&mut self, wire: WireId, args: WireArgs) -> &mut WireCache3 {
         let cached = self.bezier_3.entry(wire).or_default();
 
         cached.generation = self.generation;
@@ -694,7 +847,11 @@ impl WiresCache {
             return cached;
         }
 
-        let points = wire_bezier_3(args.frame_size, args.from, args.to);
+        let points = if args.vertical {
+            wire_bezier_3_vertical(args.frame_size, args.from, args.to)
+        } else {
+            wire_bezier_3(args.frame_size, args.from, args.to)
+        };
         let aabb = Rect::from_points(&points);
 
         cached.args = args;
@@ -705,7 +862,7 @@ impl WiresCache {
         cached
     }
 
-    pub fn get_5(&mut self, wire: WireId, args: WireArgs) -> &mut WireCache5 {
+    pub fn bezier_5(&mut self, wire: WireId, args: WireArgs) -> &mut WireCache5 {
         let cached = self.bezier_5.entry(wire).or_default();
 
         cached.generation = self.generation;
@@ -714,7 +871,11 @@ impl WiresCache {
             return cached;
         }
 
-        let points = wire_bezier_5(args.frame_size, args.from, args.to);
+        let points = if args.vertical {
+            wire_bezier_5_vertical(args.frame_size, args.from, args.to)
+        } else {
+            wire_bezier_5_horizontal(args.frame_size, args.from, args.to)
+        };
         let aabb = Rect::from_points(&points);
 
         cached.args = args;
@@ -726,7 +887,7 @@ impl WiresCache {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn get_aa(&mut self, wire: WireId, args: WireArgs) -> &mut WireCacheAA {
+    pub fn axis_aligned(&mut self, wire: WireId, args: WireArgs) -> &mut WireCacheAA {
         let cached = self.axis_aligned.entry(wire).or_default();
 
         cached.generation = self.generation;
@@ -759,7 +920,7 @@ fn draw_bezier_3(
     let clip_rect = ui.clip_rect();
 
     ui.memory_mut(|m| {
-        let cached = m.caches.cache::<WiresCache>().get_3(wire, args);
+        let cached = m.caches.cache::<WiresCache>().bezier_3(wire, args);
 
         if cached.aabb.intersects(clip_rect) {
             shapes.push(Shape::line(cached.line(threshold), stroke));
@@ -800,7 +961,7 @@ fn draw_bezier_5(
     let clip_rect = ui.clip_rect();
 
     ui.memory_mut(|m| {
-        let cached = m.caches.cache::<WiresCache>().get_5(wire, args);
+        let cached = m.caches.cache::<WiresCache>().bezier_5(wire, args);
 
         if cached.aabb.intersects(clip_rect) {
             shapes.push(Shape::line(cached.line(threshold), stroke));
@@ -918,7 +1079,7 @@ fn hit_wire_bezier_3(
     hit_threshold: f32,
 ) -> bool {
     let (aabb, points) = ctx.memory_mut(|m| {
-        let cache = m.caches.cache::<WiresCache>().get_3(wire, args);
+        let cache = m.caches.cache::<WiresCache>().bezier_3(wire, args);
 
         (cache.aabb, cache.points)
     });
@@ -1005,7 +1166,7 @@ fn hit_wire_bezier_5(
     hit_threshold: f32,
 ) -> bool {
     let (aabb, points) = ctx.memory_mut(|m| {
-        let cache = m.caches.cache::<WiresCache>().get_5(wire, args);
+        let cache = m.caches.cache::<WiresCache>().bezier_5(wire, args);
 
         (cache.aabb, cache.points)
     });
@@ -1214,7 +1375,7 @@ fn hit_wire_axis_aligned(
     hit_threshold: f32,
 ) -> bool {
     let aawire = ctx.memory_mut(|m| {
-        let cache = m.caches.cache::<WiresCache>().get_aa(wire, args);
+        let cache = m.caches.cache::<WiresCache>().axis_aligned(wire, args);
 
         cache.aawire
     });
@@ -1292,7 +1453,7 @@ fn draw_axis_aligned(
 
     let clip_rect = ui.clip_rect();
     ui.memory_mut(|m| {
-        let cached = m.caches.cache::<WiresCache>().get_aa(wire, args);
+        let cached = m.caches.cache::<WiresCache>().axis_aligned(wire, args);
 
         if cached.aawire.aabb.intersects(clip_rect) {
             shapes.push(Shape::line(cached.line(threshold), stroke));
@@ -1330,4 +1491,216 @@ fn lower_bound(min: usize, max: usize, f: impl Fn(usize) -> bool) -> usize {
     //     }
     // }
     // max
+}
+
+/// Describes where and how to place a widget on a wire.
+#[derive(Clone, Debug)]
+pub struct WireWidgetDescriptor {
+    /// Position along the wire curve. 0.0 = output pin, 1.0 = input pin.
+    /// 
+    /// Default: 0.5.
+    pub t: f32,
+
+    /// Per-widget alignment override.
+    /// 
+    /// Falls back to [`SnarlStyle::wire_widget_align`](super::SnarlStyle::wire_widget_align).
+    pub align: Option<Align2>,
+
+    /// Per-widget gap override.
+    /// 
+    /// Falls back to [`SnarlStyle::wire_widget_gap`](super::SnarlStyle::wire_widget_gap).
+    pub gap: Option<f32>,
+}
+
+impl Default for WireWidgetDescriptor {
+    fn default() -> Self {
+        Self {
+            t: 0.5,
+            align: None,
+            gap: None,
+        }
+    }
+}
+
+impl WireWidgetDescriptor {
+    /// Creates a descriptor at the given parametric position `t` with default alignment and gap.
+    #[must_use]
+    pub const fn new(t: f32) -> Self {
+        Self {
+            t,
+            align: None,
+            gap: None,
+        }
+    }
+}
+
+/// Resolved context for a wire widget, passed to
+/// [`SnarlViewer::show_wire_widget`](super::SnarlViewer::show_wire_widget).
+///
+/// Contains the final values after resolving descriptor overrides against style
+/// defaults, plus the computed screen-space position.
+#[derive(Clone, Debug)]
+pub struct WireWidgetContext {
+    /// Parametric position along the wire curve (same as [`WireWidgetDescriptor`](WireWidgetDescriptor::t)).
+    pub t: f32,
+
+    /// Screen-space position on the wire curve.
+    pub pos: Pos2,
+
+    /// Resolved alignment.
+    pub align: Align2,
+
+    /// Resolved gap.
+    pub gap: f32,
+}
+
+/// Evaluate a point on the wire curve at parametric position `t` (0.0..=1.0).
+///
+/// `t = 0.0` is the output pin position (`from`), `t = 1.0` is the input pin
+/// position (`to`).
+///
+/// For bezier curves, `t` is the standard parametric parameter, which is
+/// **not** uniform with respect to arc length. For axis-aligned wires, `t` is
+/// interpolated by arc length so that `t = 0.5` falls at the visual midpoint.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn point_on_wire(
+    frame_size: f32,
+    upscale: bool,
+    downscale: bool,
+    from: Pos2,
+    to: Pos2,
+    style: WireStyle,
+    vertical: bool,
+    t: f32,
+) -> Pos2 {
+    let frame_size = adjust_frame_size(frame_size, upscale, downscale, from, to);
+
+    match style {
+        WireStyle::Line => from.lerp(to, t),
+        WireStyle::Bezier3 => {
+            let points = if vertical {
+                wire_bezier_3_vertical(frame_size, from, to)
+            } else {
+                wire_bezier_3(frame_size, from, to)
+            };
+            sample_bezier(&points, t)
+        }
+        WireStyle::Bezier5 => {
+            let points = if vertical {
+                wire_bezier_5_vertical(frame_size, from, to)
+            } else {
+                wire_bezier_5_horizontal(frame_size, from, to)
+            };
+            sample_bezier(&points, t)
+        }
+        WireStyle::AxisAligned { corner_radius } => {
+            let aawire = wire_axis_aligned(corner_radius, frame_size, from, to);
+            sample_axis_aligned_by_arc_length(&aawire, t)
+        }
+    }
+}
+
+/// Sample a point along an axis-aligned wire by arc-length fraction `t`.
+///
+/// The wire consists of straight segments interleaved with quarter-circle arc
+/// turns. We compute the total arc length, then walk the segments/turns to
+/// find the point at `t * total_length`.
+fn sample_axis_aligned_by_arc_length(wire: &AxisAlignedWire, t: f32) -> Pos2 {
+    let t = t.clamp(0.0, 1.0);
+
+    // Collect lengths of each piece: segment, turn, segment, turn, ..., segment.
+    // Total pieces = turns + 1 segments + turns arcs = 2*turns + 1.
+    let num_segments = wire.turns + 1;
+    let num_pieces = num_segments + wire.turns;
+
+    // We'll walk the pieces inline rather than allocating.
+    // First pass: compute total length.
+    let mut total_length = 0.0f32;
+    for i in 0..num_pieces {
+        if i % 2 == 0 {
+            // Straight segment
+            let seg_idx = i / 2;
+            let (start, end) = wire.segments[seg_idx];
+            total_length += (end - start).length();
+        } else {
+            // Arc turn (quarter circle)
+            let turn_idx = i / 2;
+            let radius = wire.turn_radii[turn_idx];
+            if radius > 0.0 {
+                total_length += std::f32::consts::FRAC_PI_2 * radius;
+            }
+        }
+    }
+
+    if total_length <= 0.0 {
+        return wire.segments[0].0;
+    }
+
+    // Second pass: walk to target distance.
+    let target = t * total_length;
+    let mut walked = 0.0f32;
+
+    for i in 0..num_pieces {
+        if i % 2 == 0 {
+            // Straight segment
+            let seg_idx = i / 2;
+            let (start, end) = wire.segments[seg_idx];
+            let seg_len = (end - start).length();
+            if walked + seg_len >= target {
+                let frac = if seg_len > 0.0 {
+                    (target - walked) / seg_len
+                } else {
+                    0.0
+                };
+                return start.lerp(end, frac);
+            }
+            walked += seg_len;
+        } else {
+            // Arc turn (quarter circle)
+            let turn_idx = i / 2;
+            let radius = wire.turn_radii[turn_idx];
+            if radius <= 0.0 {
+                continue;
+            }
+            let arc_len = std::f32::consts::FRAC_PI_2 * radius;
+            if walked + arc_len >= target {
+                let frac = (target - walked) / arc_len;
+                return sample_quarter_arc(wire, turn_idx, frac);
+            }
+            walked += arc_len;
+        }
+    }
+
+    // Rounding: return the end point.
+    wire.segments[wire.turns].1
+}
+
+/// Sample a quarter-circle arc turn at fractional position `frac` (0.0..=1.0).
+///
+/// The arc connects the end of `segments[turn_idx]` to the start of
+/// `segments[turn_idx + 1]`, centered at `turn_centers[turn_idx]`.
+fn sample_quarter_arc(wire: &AxisAlignedWire, turn_idx: usize, frac: f32) -> Pos2 {
+    let center = wire.turn_centers[turn_idx];
+    let arc_start = wire.segments[turn_idx].1;
+    let arc_end = wire.segments[turn_idx + 1].0;
+
+    // Determine start and sweep angles from the arc endpoints relative to center.
+    let start_offset = arc_start - center;
+    let end_offset = arc_end - center;
+    let start_angle = f32::atan2(start_offset.y, start_offset.x);
+    let mut end_angle = f32::atan2(end_offset.y, end_offset.x);
+
+    // Ensure we sweep in the shorter direction (quarter circle).
+    let mut sweep = end_angle - start_angle;
+    if sweep > std::f32::consts::PI {
+        sweep -= std::f32::consts::TAU;
+    } else if sweep < -std::f32::consts::PI {
+        sweep += std::f32::consts::TAU;
+    }
+    end_angle = start_angle + sweep;
+
+    let angle = start_angle + frac * (end_angle - start_angle);
+    let radius = wire.turn_radii[turn_idx];
+    pos2(center.x + radius * angle.cos(), center.y + radius * angle.sin())
 }

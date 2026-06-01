@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use egui::Pos2;
 
-use crate::{wire_pins, InPinId, Node, OutPinId, Snarl};
+use crate::{wire_pins, InPinId, Node, NodeId, OutPinId, Snarl};
 
 pub enum Effect<T> {
     /// Adds a new node to the Snarl.
@@ -25,6 +25,9 @@ pub enum Effect<T> {
 
     /// Removes all connections to the input pin.
     DropInputs { pin: InPinId },
+
+    /// Removes all connections to and from the node.
+    DisconnectAll { node: NodeId },
 
     /// Executes a closure with mutable reference to the Snarl.
     Closure(Box<dyn FnOnce(&mut Snarl<T>)>),
@@ -102,6 +105,12 @@ impl<T> Effects<T> {
     pub fn drop_outputs(&mut self, pin: OutPinId) {
         self.effects.push(Effect::DropOutputs { pin });
     }
+
+    /// Removes all connections to and from the node.
+    #[inline(always)]
+    pub fn disconnect_all(&mut self, node: NodeId) {
+        self.effects.push(Effect::DisconnectAll { node });
+    }
 }
 
 impl<T> Snarl<T> {
@@ -152,6 +161,11 @@ impl<T> Snarl<T> {
             Effect::DropInputs { pin } => {
                 if self.nodes.contains(pin.node) {
                     self.wires.drop_inputs(pin);
+                }
+            }
+            Effect::DisconnectAll { node } => {
+                if self.nodes.contains(node.0) {
+                    self.wires.drop_node(node);
                 }
             }
             Effect::Closure(f) => f(self),
