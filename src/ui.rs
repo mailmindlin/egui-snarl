@@ -1587,13 +1587,6 @@ where
         viewer.disconnect(&out_pin, &in_pin, snarl);
     }
 
-    // Remove hovered wire by second click
-    if hovered_wire_disconnect && let Some(wire) = hovered_wire {
-        let out_pin = OutPin::new(snarl, wire.out_pin);
-        let in_pin = InPin::new(snarl, wire.in_pin);
-        viewer.disconnect(&out_pin, &in_pin, snarl);
-    }
-
     if let Some(select_rect) = rect_selection_ended {
         let mut select_nodes: Vec<NodeId> = node_rects
             .into_iter()

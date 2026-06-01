@@ -268,7 +268,9 @@ impl PinInfo {
 
         PinWireInfo {
             color: self.wire_color.unwrap_or(fill),
-            style: self.wire_style.unwrap_or(snarl_style.wire_style()),
+            style: self
+                .wire_style
+                .unwrap_or_else(|| snarl_style.wire_style()),
         }
     }
 }
