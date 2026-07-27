@@ -1,6 +1,7 @@
+use std::collections::HashSet;
+
 use egui::{
     Context, Id, Pos2, Rect, Ui, Vec2,
-    ahash::HashSet,
     emath::{GuiRounding, TSTransform},
     style::Spacing,
 };

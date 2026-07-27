@@ -1,18 +1,10 @@
 //! This module provides functionality for showing [`Snarl`] graph in [`Ui`].
 #![allow(clippy::match_same_arms)]
 
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 use egui::{
-    Align, Align2, Color32, CornerRadius, Frame, Id, Key, LayerId, Layout, Margin, Modifiers,
-    PointerButton, Pos2, Rect, Scene, Sense, Stroke, StrokeKind, Style, Ui, UiBuilder,
-    UiKind, UiStackInfo, Vec2,
-    collapsing_header::paint_default_icon,
-    emath::{GuiRounding, RectAlign, TSTransform},
-    epaint::Shadow,
-    pos2,
-    response::Flags,
-    vec2,
+    Align, Align2, AsIdSalt, Color32, CornerRadius, Frame, Id, Key, LayerId, Layout, Margin, Modifiers, PointerButton, Pos2, Rect, Scene, Sense, Stroke, StrokeKind, Style, Ui, UiBuilder, UiKind, UiStackInfo, Vec2, collapsing_header::paint_default_icon, emath::{GuiRounding, RectAlign, TSTransform}, epaint::Shadow, pos2, response::Flags, vec2,
 };
 use egui_scale::EguiScale;
 use smallvec::SmallVec;
@@ -1152,7 +1144,7 @@ impl SnarlWidget {
     /// Ignored if [`SnarlWidget::id`] was set.
     #[inline]
     #[must_use]
-    pub fn id_salt(mut self, id_salt: impl Hash) -> Self {
+    pub fn id_salt(mut self, id_salt: impl AsIdSalt) -> Self {
         self.id_salt = Id::new(id_salt);
         self
     }
@@ -3712,7 +3704,7 @@ impl<T> Snarl<T> {
         viewer: &mut V,
         style: &SnarlStyle,
         config: &SnarlConfig,
-        id_salt: impl Hash,
+        id_salt: impl AsIdSalt,
         ui: &mut Ui,
     ) where
         V: SnarlViewer<T>,
