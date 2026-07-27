@@ -1,7 +1,7 @@
 use core::f32;
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug};
 
-use egui::{Align2, Color32, Context, Id, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, ahash::HashMap, cache::CacheTrait, pos2};
+use egui::{Align2, Color32, Context, Id, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, cache::CacheTrait, pos2};
 
 use crate::{GroupId, InPin, InPinId, OutPin, OutPinId, Snarl, Wire, ui::{WireWidgetInfo, mix_colors, nearest_rect_edge, state::GroupState}};
 

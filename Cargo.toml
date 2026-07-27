@@ -11,15 +11,15 @@ documentation = "https://docs.rs/egui-snarl"
 repository = "https://github.com/zakarumych/egui-snarl"
 
 [workspace.dependencies]
-egui = { version = "0.34" }
-eframe = { version = "0.34" }
-egui_extras = { version = "0.34" }
+egui = { version = "0.35" }
+eframe = { version = "0.35" }
+egui_extras = { version = "0.35" }
 syn = { version = "2" }
 serde = { version = "1" }
 serde_json = { version = "1" }
 
-egui-probe = { version = "0.11.0" }
-egui-scale = { version = "0.4.0" }
+egui-probe = { version = "0.12.0" }
+egui-scale = { version = "0.5.0" }
 facet = { version = "0.31" }
 wasm-bindgen-futures = "0.4"
 web-sys = "0.3.81"
